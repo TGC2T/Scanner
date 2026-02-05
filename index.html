@@ -2,122 +2,20 @@
 <html>
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Home Depot Saw Demo</title>
     <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
-
-    <script>
-      AFRAME.registerComponent('saw-game-logic', {
-        init: function () {
-          this.woodTarget = document.querySelector('#wood-target');
-          this.sawTarget = document.querySelector('#saw-target');
-          this.progressBar = document.querySelector('#progress-fill');
-          this.statusText = document.querySelector('#status-text');
-          
-          // Game Variables
-          this.cutsNeeded = 20; // Hardness of the wood
-          this.currentCuts = 0;
-          this.lastSawX = 0;
-          this.isCutting = false;
-          this.direction = 0; // 1 = right, -1 = left
-          
-          // Audio (Optional - creates a buzz sound)
-          // this.sawSound = new Audio('saw.mp3'); 
-        },
-
-        tick: function () {
-          if (!this.woodTarget.object3D.visible || !this.sawTarget.object3D.visible) {
-            this.statusText.innerText = "Locate both markers...";
-            return;
-          }
-
-          // 1. Get World Positions
-          const woodPos = new THREE.Vector3();
-          const sawPos = new THREE.Vector3();
-          this.woodTarget.object3D.getWorldPosition(woodPos);
-          this.sawTarget.object3D.getWorldPosition(sawPos);
-
-          // 2. Calculate Distance (Are we touching the wood?)
-          // We check the Y (height) and Z (depth) difference
-          const distanceY = Math.abs(woodPos.y - sawPos.y);
-          const distanceZ = Math.abs(woodPos.z - sawPos.z);
-          
-          // Thresholds: Adjust these based on your physical marker size
-          const isTouching = distanceY < 0.3 && distanceZ < 0.3;
-
-          if (isTouching) {
-            this.statusText.innerText = "Cutting...";
-            this.calculateSawingMotion(woodPos, sawPos);
-          } else {
-            this.statusText.innerText = "Bring saw closer to wood";
-          }
-        },
-
-        calculateSawingMotion: function(woodPos, sawPos) {
-          // 3. Calculate Relative X Movement (The Sawing Action)
-          // We compare the saw's X position relative to the wood
-          const relativeX = sawPos.x - woodPos.x;
-
-          // Check if direction changed (Back vs Forth)
-          if (Math.abs(relativeX - this.lastSawX) > 0.02) { // 0.02 is sensitivity buffer
-             const currentDirection = Math.sign(relativeX - this.lastSawX);
-             
-             if (this.direction !== 0 && currentDirection !== this.direction) {
-                // Direction FLIP detected = 1 stroke
-                this.registerStroke();
-             }
-             this.direction = currentDirection;
-          }
-          this.lastSawX = relativeX;
-        },
-
-        registerStroke: function() {
-           this.currentCuts++;
-           
-           // Visual Feedback: Shake the wood slightly?
-           // Update Progress Bar
-           const percentage = Math.min((this.currentCuts / this.cutsNeeded) * 100, 100);
-           this.progressBar.style.width = percentage + "%";
-
-           if (this.currentCuts >= this.cutsNeeded) {
-             this.statusText.innerText = "CUT COMPLETE!";
-             this.statusText.style.color = "#00ff00"; // Green
-             // Reset after 3 seconds?
-           }
-        }
-      });
-    </script>
-    
-    <style>
-      /* Simple CSS HUD */
-      #ui-layer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 999; }
-      .hud-container { position: absolute; bottom: 20px; width: 100%; text-align: center; }
-      .bar-bg { width: 300px; height: 30px; background: rgba(0,0,0,0.5); border: 2px solid white; margin: 0 auto; border-radius: 15px; overflow: hidden; }
-      .bar-fill { width: 0%; height: 100%; background: #F96302; /* Home Depot Orange */ transition: width 0.1s; }
-      h1 { font-family: sans-serif; color: white; text-shadow: 2px 2px 0 #000; font-size: 24px; margin-bottom: 5px; }
-    </style>
   </head>
-
   <body>
-    <div id="ui-layer">
-      <div class="hud-container">
-        <h1 id="status-text">Find the Wood & Saw</h1>
-        <div class="bar-bg"><div id="progress-fill" class="bar-fill"></div></div>
-      </div>
-    </div>
+    <a-scene mindar-image="imageTargetSrc: ./targets.mind;" vr-mode-ui="enabled: true">
+      <a-entity light="type: ambient; intensity: 0.5;"></a-entity>
 
-        <a-entity mindar-image-target="targetIndex: 0">
-          <a-box position="0 0 0" scale="1 0.1 0.5" material="color: orange;"></a-box>
-        </a-entity>
+      <a-entity light="type: directional; intensity: 0.8;" position="-1 2 1"></a-entity>
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
-        <a-entity mindar-image-target="targetIndex: 1">
-          <a-entity gltf-model="url(saw.glb)" scale="0.5 0.5 0.5"></a-entity>
-        </a-entity>
-      </a-scene>
+      <a-entity mindar-image-target="targetIndex: 0">
+        <a-box id="virtual-wood" position="0 0 0" scale="1 0.1 0.5" material="color: red"></a-box>
+        
+      </a-entity>
     </a-scene>
   </body>
 </html>
-
-
-
-
