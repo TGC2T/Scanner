@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hand-Tracked Sawing (Single Marker)</title>
+  <title>AR Sawing: Desktop/Mobile Fix</title>
   <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
 
@@ -26,37 +26,35 @@
         this.lastHandPos = new THREE.Vector3();
         this.strokeDirection = 0;
         
-        // Settings
         this.activeHardness = this.data.hardness;
         this.activeSharpness = this.data.sharpness;
       },
 
       tick: function () {
-        // 1. Get World Positions
-        // We need 'World' position because the Wood is child of Camera, 
-        // and Saw is child of Marker (different coordinate systems)
         const woodPos = new THREE.Vector3();
         const sawPos = new THREE.Vector3();
         
+        // precise world tracking
         this.wood.object3D.getWorldPosition(woodPos);
         this.saw.object3D.getWorldPosition(sawPos);
 
-        // 2. Calculate Distance (Are you close enough?)
-        // 0.4 roughly equals "Arm's reach" in AR scale
+        // Increased distance threshold for the larger saw/offset
         const distance = woodPos.distanceTo(sawPos);
         
-        if (distance < 0.35) { 
+        // Debugging log if you need to check console
+        // console.log("Distance:", distance);
+
+        if (distance < 0.8) { 
            this.guideText.innerText = "⚡ SAW ACTIVE ⚡";
            this.guideText.style.color = "#00FF00";
            this.processSawing(sawPos, woodPos);
         } else {
-           this.guideText.innerText = "Bring Hand Closer to Wood";
+           this.guideText.innerText = "Move Hand Closer to Plank";
            this.guideText.style.color = "yellow";
         }
       },
 
       processSawing: function(sawPos, woodPos) {
-        // Calculate movement relative to the wood
         const dist = sawPos.distanceTo(woodPos);
         
         if (!this.lastDist) {
@@ -66,17 +64,13 @@
 
         const delta = dist - this.lastDist;
 
-        // Threshold to ignore jitter (0.002 is sensitive, 0.01 is heavy)
         if (Math.abs(delta) > 0.005) {
              const currentDir = Math.sign(delta);
-
-             // Detect direction flip (Push vs Pull)
              if (this.strokeDirection !== 0 && currentDir !== this.strokeDirection) {
                  this.registerStroke();
              }
              this.strokeDirection = currentDir;
         }
-        
         this.lastDist = dist;
       },
 
@@ -87,17 +81,17 @@
         const percent = Math.min((this.cuts / this.activeHardness) * 100, 100);
         this.progressBar.style.width = percent + "%";
 
-        // Visual Feedback: Shake the HUD wood slightly
-        const originalPos = this.wood.getAttribute('position');
-        this.wood.object3D.position.x += (Math.random() - 0.5) * 0.02;
+        // Visual Shake
+        const originalX = 0; 
+        this.wood.object3D.position.x = originalX + (Math.random() - 0.5) * 0.05;
         setTimeout(() => {
-            this.wood.setAttribute('position', '0 -0.3 -0.6'); // Reset to default HUD pos
+            this.wood.object3D.position.x = originalX; 
         }, 50);
 
-        // Color Flash on Saw
-        const sawModel = document.querySelector('#saw-visual');
-        sawModel.setAttribute('color', 'white');
-        setTimeout(() => sawModel.setAttribute('color', '#888'), 50);
+        // Flash Saw
+        const blade = document.querySelector('#saw-blade-visual');
+        blade.setAttribute('color', 'white');
+        setTimeout(() => blade.setAttribute('color', '#AAA'), 50);
 
         if (this.cuts >= this.activeHardness) {
             this.statusText.innerText = "CUT COMPLETE!";
@@ -119,9 +113,7 @@
       }
     });
 
-    // Menu Interactivity
     document.addEventListener('DOMContentLoaded', () => {
-        // Listen for custom events
         const scene = document.querySelector('a-scene');
         const logic = () => scene.components['hand-saw-logic'];
 
@@ -134,7 +126,6 @@
         });
 
         scene.addEventListener('update-game', (e) => {
-             // Safe check in case component isn't fully loaded yet
              if(logic()) logic().updateSettings(e.detail.s, e.detail.h, e.detail.t);
         });
     });
@@ -143,7 +134,6 @@
   <style>
     body { margin: 0; font-family: sans-serif; overflow: hidden; }
     
-    /* HUD Layer */
     #hud-ui {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
         pointer-events: none; z-index: 10;
@@ -161,7 +151,6 @@
     }
     .bar-fill { width: 0%; height: 100%; background: #F96302; transition: width 0.1s; }
 
-    /* Left Thumb Controls */
     .controls {
         pointer-events: auto; padding: 20px;
         display: flex; flex-direction: column; gap: 15px; align-items: flex-start;
@@ -201,25 +190,24 @@
 
     <a-camera position="0 0 0" look-controls="enabled: false">
         
-        <a-entity id="hud-wood" position="0 -0.3 -0.6">
-            <a-box scale="1.5 0.1 0.4" color="#F4E3C1" shadow></a-box>
-            <a-box scale="1.52 0.12 0.42" material="wireframe: true; color: #000; opacity: 0.3"></a-box>
+        <a-entity id="hud-wood" position="0 -0.5 -2.0">
+            <a-box scale="2.5 0.15 0.8" color="#F4E3C1" shadow></a-box>
+            <a-box scale="2.52 0.17 0.82" material="wireframe: true; color: #000; opacity: 0.5"></a-box>
         </a-entity>
 
     </a-camera>
 
-    <a-light type="directional" intensity="1" position="0 0 1"></a-light>
-    <a-light type="ambient" intensity="0.5"></a-light>
+    <a-light type="directional" intensity="1.2" position="0 1 1"></a-light>
+    <a-light type="ambient" intensity="0.6"></a-light>
 
     <a-entity mindar-image-target="targetIndex: 0">
         
-        <a-entity id="hand-saw" position="0 0 0" rotation="0 -90 0">
+        <a-entity id="hand-saw" position="-0.5 0.5 0" rotation="0 90 0">
              
-             <a-box id="saw-handle" position="0 0 0.1" scale="0.1 0.3 0.1" color="#F96302"></a-box>
+             <a-box id="saw-handle" position="0 0 0" scale="0.2 0.6 0.2" color="#F96302"></a-box>
              
-             <a-box id="saw-visual" position="0.3 0 0.1" scale="0.6 0.2 0.02" color="#888" metalness="0.7" roughness="0.2"></a-box>
+             <a-box id="saw-blade-visual" position="0 0 0.5" scale="0.04 0.4 1.5" color="#AAA" metalness="0.7" roughness="0.2"></a-box>
              
-             <a-entity position="0.6 0 0.1"></a-entity>
         </a-entity>
 
     </a-entity>
