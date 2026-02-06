@@ -2,236 +2,160 @@
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AR Sawing: Delayed Render</title>
+  <title>AR Sawing: Camera Injector</title>
   <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
 
   <script>
-    // 1. GAME LOGIC (Same as before, but handles late initialization)
-    AFRAME.registerComponent('saw-logic', {
-      schema: {
-        hardness: { type: 'number', default: 100 },
-        sharpness: { type: 'number', default: 2 }
-      },
-
-      init: function () {
-        this.wood = null; // Will be assigned later
-        this.saw = document.querySelector('#hand-saw');
-        this.camera = document.querySelector('[camera]');
+    AFRAME.registerComponent('camera-injector', {
+      init: function() {
+        const scene = this.el;
+        const status = document.getElementById('status-text');
         
-        this.progressBar = document.querySelector('#progress-fill');
-        this.statusText = document.querySelector('#status-text');
+        // This event fires when MindAR is fully running
+        scene.addEventListener('arReady', () => {
+          status.innerText = "AR Ready. Injecting Wood...";
+          
+          // 1. Find the new AR Camera (MindAR creates this automatically)
+          const activeCamera = scene.querySelector('[camera]');
+          
+          // 2. Create the Wood HUD *inside* this new camera
+          // We create it here to ensure it exists in the right context
+          const woodContainer = document.createElement('a-entity');
+          woodContainer.setAttribute('id', 'hud-wood');
+          // Position: Center (0), Down (-0.5), Forward (-3)
+          woodContainer.setAttribute('position', '0 -0.5 -3'); 
+          woodContainer.setAttribute('rotation', '15 0 0'); // Tilted slightly up
+          
+          woodContainer.innerHTML = `
+            <a-box id="wood-visual" scale="3 0.2 1" color="#F4E3C1" shadow></a-box>
+            <a-box id="cut-zone" scale="3.2 0.6 1.4" material="wireframe: true; color: lime; opacity: 0.5"></a-box>
+          `;
+          
+          activeCamera.appendChild(woodContainer);
+          
+          // 3. Start the game logic now that wood exists
+          scene.emit('wood-injected', { wood: woodContainer });
+        });
+      }
+    });
 
+    AFRAME.registerComponent('game-logic', {
+      init: function () {
+        this.wood = null;
+        this.saw = document.getElementById('hand-saw');
+        this.progressBar = document.getElementById('progress-fill');
+        this.statusText = document.getElementById('status-text');
         this.cuts = 0;
-        this.activeHardness = this.data.hardness;
+        this.hardness = 100;
         this.lastZ = null;
-        this.isZoneActive = false;
-        this.isReady = false; // Flag to prevent running before board exists
-      },
 
-      setBoard: function(boardEl) {
-          this.wood = boardEl;
-          this.isReady = true;
-          this.statusText.innerText = "System Ready. Bring Hand into View.";
+        // Wait for the injector to give us the wood
+        this.el.addEventListener('wood-injected', (e) => {
+            this.wood = e.detail.wood;
+            this.statusText.innerText = "READY! Bring Hand to Camera";
+            this.statusText.style.color = "#00FF00";
+        });
       },
 
       tick: function () {
-        if (!this.isReady || !this.wood) return;
+        if (!this.wood) return;
 
-        // --- 1. FORCE HUD POSITION ---
-        const camPos = new THREE.Vector3();
-        const camRot = new THREE.Quaternion();
-        this.camera.object3D.getWorldPosition(camPos);
-        this.camera.object3D.getWorldQuaternion(camRot);
-
-        const offset = new THREE.Vector3(0, -0.2, -2); 
-        offset.applyQuaternion(camRot);
-        const targetPos = new THREE.Vector3().addVectors(camPos, offset);
-        
-        this.wood.object3D.position.lerp(targetPos, 0.1);
-        this.wood.object3D.quaternion.copy(camRot);
-
-        // --- 2. DISTANCE CHECK ---
+        // Get WORLD positions (Critical because wood and saw are in different coordinate spaces)
         const woodPos = new THREE.Vector3();
         const sawPos = new THREE.Vector3();
-        this.wood.object3D.getWorldPosition(woodPos);
+        
+        this.wood.children[0].object3D.getWorldPosition(woodPos); // Get the visual box, not container
         this.saw.object3D.getWorldPosition(sawPos);
 
+        // Distance Check (Increased to 1.0 because wood is further back now)
         const distance = woodPos.distanceTo(sawPos);
-        const inRange = distance < 0.8; // Increased range slightly for safety
-
-        if (inRange) {
-             const zone = this.wood.querySelector('#cut-zone');
-             if (!this.isZoneActive) {
-                 this.isZoneActive = true;
-                 if(zone) zone.setAttribute('color', 'red'); 
-                 this.statusText.innerText = "RANGE ACTIVE - MOVE TO CUT";
-                 this.statusText.style.color = "#00FF00";
-             }
-             this.processCutting(sawPos);
+        
+        if (distance < 1.0) {
+            this.processSawing(sawPos);
+            this.wood.querySelector('#cut-zone').setAttribute('color', 'red');
         } else {
-             const zone = this.wood.querySelector('#cut-zone');
-             if (this.isZoneActive) {
-                 this.isZoneActive = false;
-                 if(zone) zone.setAttribute('color', 'lime');
-                 this.statusText.innerText = "Move Hand Closer";
-                 this.statusText.style.color = "yellow";
-             }
-             this.lastZ = null;
+            this.wood.querySelector('#cut-zone').setAttribute('color', 'lime');
+            this.lastZ = null;
         }
       },
 
-      processCutting: function(sawPos) {
+      processSawing: function(sawPos) {
         if (this.lastZ === null) {
             this.lastZ = sawPos.z;
             return;
         }
 
-        const movement = Math.abs(sawPos.z - this.lastZ);
+        // Calculate absolute movement
+        const move = Math.abs(sawPos.z - this.lastZ);
 
-        if (movement > 0.002) {
-            this.registerCut(movement);
+        if (move > 0.002) {
+            this.cuts += (move * 800); // Multiplier
+            const percent = Math.min((this.cuts / this.hardness) * 100, 100);
+            this.progressBar.style.width = percent + "%";
+            
+            // Visual Shake
+            this.wood.object3D.position.x = (Math.random() - 0.5) * 0.02;
+
+            if (this.cuts >= this.hardness) {
+                this.statusText.innerText = "CUT COMPLETE!";
+                this.wood.setAttribute('visible', 'false');
+            }
         }
-
         this.lastZ = sawPos.z;
-      },
-
-      registerCut: function(force) {
-        if (this.cuts >= this.activeHardness) return;
-
-        this.cuts += (force * 500 * this.data.sharpness);
-        
-        const percent = Math.min((this.cuts / this.activeHardness) * 100, 100);
-        this.progressBar.style.width = percent + "%";
-
-        this.wood.object3D.position.y += (Math.random() - 0.5) * 0.01;
-
-        if (this.cuts >= this.activeHardness) {
-            this.statusText.innerText = "CUT COMPLETE!";
-            this.wood.setAttribute('visible', 'false');
-        }
-      },
-      
-      reset: function(h, s, txt) {
-          if(!this.isReady) return;
-          this.activeHardness = h;
-          this.data.sharpness = s;
-          this.cuts = 0;
-          this.progressBar.style.width = "0%";
-          this.wood.setAttribute('visible', 'true');
-          this.statusText.innerText = txt;
-          const zone = this.wood.querySelector('#cut-zone');
-          if(zone) zone.setAttribute('color', 'lime');
       }
-    });
-
-    // 2. WAIT FOR AR READY EVENT
-    document.addEventListener('DOMContentLoaded', () => {
-        const scene = document.querySelector('a-scene');
-        const statusText = document.querySelector('#status-text');
-
-        // Listen for MindAR's "ready" event
-        scene.addEventListener("arReady", (event) => {
-            console.log("MindAR is ready - Injecting Board...");
-            statusText.innerText = "Camera Loaded. Spawning Board...";
-
-            // Create the Board Entity dynamically
-            const board = document.createElement('a-entity');
-            board.setAttribute('id', 'floating-wood');
-            board.setAttribute('position', '0 0 -2');
-            
-            // Inner Visuals
-            board.innerHTML = `
-                <a-box scale="2 0.1 0.6" color="#F4E3C1"></a-box>
-                <a-box id="cut-zone" scale="2.2 0.5 1.0" material="wireframe: true; color: lime; opacity: 0.8"></a-box>
-            `;
-            
-            // Add to scene
-            scene.appendChild(board);
-            
-            // Tell the game logic the board exists now
-            const logic = scene.components['saw-logic'];
-            if(logic) logic.setBoard(board);
-        });
-
-        // UI Buttons
-        document.getElementById('btn-pine').addEventListener('click', () => {
-            const logic = scene.components['saw-logic'];
-            if(logic) logic.reset(100, 2, 'Cutting Pine...');
-        });
-        
-        document.getElementById('btn-oak').addEventListener('click', () => {
-             const logic = scene.components['saw-logic'];
-             if(logic) logic.reset(300, 5, 'Cutting Oak...');
-        });
     });
   </script>
 
   <style>
-    body { margin: 0; overflow: hidden; background-color: transparent !important; }
-    html { background-color: transparent !important; }
-    
-    video {
-        position: absolute; top: 0; left: 0; z-index: -1 !important;
-    }
-    canvas.a-canvas {
-        position: absolute; top: 0; left: 0; z-index: 100 !important;
-        background-color: transparent !important;
-    }
+    body { margin: 0; overflow: hidden; }
+    /* Force Canvas on top of Video */
+    canvas.a-canvas { position: absolute; top: 0; left: 0; z-index: 50 !important; }
+    video { position: absolute; top: 0; left: 0; z-index: 1 !important; }
 
     #ui {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        pointer-events: none; z-index: 200;
-        display: flex; flex-direction: column; justify-content: space-between;
+        pointer-events: none; z-index: 100;
+        display: flex; flex-direction: column; align-items: center;
     }
-    
-    .hud-top {
-        background: rgba(0,0,0,0.5); padding: 20px; text-align: center; color: white;
-        border-bottom: 2px solid #00FF00;
+    .hud-box {
+        margin-top: 20px; background: rgba(0,0,0,0.6); padding: 15px; 
+        border-radius: 10px; text-align: center; color: white;
     }
-    
-    .bar-box {
-        width: 300px; height: 15px; background: #333; margin: 10px auto;
-        border: 2px solid white; border-radius: 10px; overflow: hidden;
+    .progress-track {
+        width: 300px; height: 20px; background: #333; 
+        margin-top: 10px; border: 2px solid white; border-radius: 10px;
     }
-    .bar-fill { width: 0%; height: 100%; background: #00FF00; transition: width 0.1s; }
-
-    .controls { pointer-events: auto; padding: 20px; display: flex; justify-content: center; gap: 20px; }
-    .btn { padding: 15px 30px; font-size: 16px; background: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+    .progress-bar { width: 0%; height: 100%; background: #00FF00; }
   </style>
 </head>
 <body>
 
   <div id="ui">
-    <div class="hud-top">
-        <div id="status-text">Initializing Camera...</div>
-        <div class="bar-box"><div id="progress-fill" class="bar-fill"></div></div>
-    </div>
-    <div class="controls">
-        <button id="btn-pine" class="btn">🌲 Pine</button>
-        <button id="btn-oak" class="btn">🌳 Oak</button>
+    <div class="hud-box">
+        <div id="status-text">Initializing...</div>
+        <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
     </div>
   </div>
 
   <a-scene 
-    saw-logic
+    camera-injector 
+    game-logic
     mindar-image="imageTargetSrc: ./targets.mind; filterMinCF:0.0001; filterBeta: 0.001;" 
     color-space="sRGB" 
     renderer="colorManagement: true, physicallyCorrectLights: true, alpha: true" 
     vr-mode-ui="enabled: false">
 
-    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
-
     <a-light type="directional" intensity="1.5" position="1 1 1"></a-light>
     <a-light type="ambient" intensity="0.8"></a-light>
 
     <a-entity mindar-image-target="targetIndex: 0">
-        <a-entity id="hand-saw" position="0.4 0.2 0" rotation="0 180 0">
-             <a-box position="0 0 0" scale="0.15 0.4 0.15" color="orange"></a-box>
+        <a-entity id="hand-saw" position="0.5 0.5 -0.5" rotation="0 180 0">
+             <a-box scale="0.15 0.4 0.15" color="orange"></a-box>
              <a-box position="0 -0.2 0.6" scale="0.05 0.3 1.2" color="silver"></a-box>
         </a-entity>
     </a-entity>
-  </a-scene>
 
+  </a-scene>
 </body>
 </html>
