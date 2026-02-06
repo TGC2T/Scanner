@@ -2,65 +2,79 @@
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AR Sawing: Desktop/Mobile Fix</title>
+  <title>Desktop AR Sawing (Fixed)</title>
   <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
 
   <script>
-    AFRAME.registerComponent('hand-saw-logic', {
+    AFRAME.registerComponent('desktop-ar-logic', {
       schema: {
         hardness: { type: 'number', default: 100 },
         sharpness: { type: 'number', default: 5 }
       },
 
       init: function () {
-        this.wood = document.querySelector('#hud-wood');
+        this.wood = document.querySelector('#floating-wood');
         this.saw = document.querySelector('#hand-saw');
+        this.camera = document.querySelector('[camera]');
         
         this.progressBar = document.querySelector('#progress-fill');
         this.statusText = document.querySelector('#status-text');
         this.guideText = document.querySelector('#guide-text');
 
         this.cuts = 0;
-        this.isCutting = false;
-        this.lastHandPos = new THREE.Vector3();
-        this.strokeDirection = 0;
-        
         this.activeHardness = this.data.hardness;
         this.activeSharpness = this.data.sharpness;
+        this.strokeDirection = 0;
       },
 
       tick: function () {
-        const woodPos = new THREE.Vector3();
-        const sawPos = new THREE.Vector3();
+        // --- FIX 1: MANUAL HUD PLACEMENT ---
+        // Instead of parenting, we manually place the wood in front of the camera every frame.
+        // This prevents the AR library from overwriting our positions.
         
-        // precise world tracking
-        this.wood.object3D.getWorldPosition(woodPos);
-        this.saw.object3D.getWorldPosition(sawPos);
+        const camPos = new THREE.Vector3();
+        const camRot = new THREE.Quaternion();
+        this.camera.object3D.getWorldPosition(camPos);
+        this.camera.object3D.getWorldQuaternion(camRot);
 
-        // Increased distance threshold for the larger saw/offset
-        const distance = woodPos.distanceTo(sawPos);
+        // Create a vector pointing "forward" from the camera
+        // (0, -0.2, -2) means: Center X, Slightly Down Y, 2 Meters Forward Z
+        const offset = new THREE.Vector3(0, -0.2, -2); 
+        offset.applyQuaternion(camRot); // Rotate the offset to match where you are looking
         
-        // Debugging log if you need to check console
-        // console.log("Distance:", distance);
+        // Set wood position: Camera Pos + Offset
+        const targetPos = new THREE.Vector3().addVectors(camPos, offset);
+        
+        // Smoothly move wood there (prevents jitter)
+        this.wood.object3D.position.lerp(targetPos, 0.1);
+        this.wood.object3D.quaternion.copy(camRot); // Face the camera
 
-        if (distance < 0.8) { 
+        // --- GAME LOGIC ---
+        
+        // Get World Positions for distance check
+        const woodWorldPos = new THREE.Vector3();
+        const sawWorldPos = new THREE.Vector3();
+        
+        this.wood.object3D.getWorldPosition(woodWorldPos);
+        this.saw.object3D.getWorldPosition(sawWorldPos);
+
+        const distance = woodWorldPos.distanceTo(sawWorldPos);
+        
+        // Desktop webcams have different depth perception, increased range to 0.5
+        if (distance < 0.5) { 
            this.guideText.innerText = "⚡ SAW ACTIVE ⚡";
            this.guideText.style.color = "#00FF00";
-           this.processSawing(sawPos, woodPos);
+           this.processSawing(sawWorldPos, woodWorldPos);
         } else {
-           this.guideText.innerText = "Move Hand Closer to Plank";
+           this.guideText.innerText = "Bring Marker Closer to Screen";
            this.guideText.style.color = "yellow";
         }
       },
 
       processSawing: function(sawPos, woodPos) {
         const dist = sawPos.distanceTo(woodPos);
-        
-        if (!this.lastDist) {
-            this.lastDist = dist;
-            return;
-        }
+        if (!this.lastDist) { this.lastDist = dist; return; }
 
         const delta = dist - this.lastDist;
 
@@ -81,12 +95,9 @@
         const percent = Math.min((this.cuts / this.activeHardness) * 100, 100);
         this.progressBar.style.width = percent + "%";
 
-        // Visual Shake
-        const originalX = 0; 
-        this.wood.object3D.position.x = originalX + (Math.random() - 0.5) * 0.05;
-        setTimeout(() => {
-            this.wood.object3D.position.x = originalX; 
-        }, 50);
+        // Visual Feedback
+        this.wood.object3D.rotateX(0.05); // Tilt wood slightly
+        setTimeout(() => this.wood.object3D.rotateX(-0.05), 50);
 
         // Flash Saw
         const blade = document.querySelector('#saw-blade-visual');
@@ -102,41 +113,47 @@
         }
       },
 
-      updateSettings: function(sharpness, hardness, priceText) {
+      updateSettings: function(sharpness, hardness, text) {
           this.activeSharpness = sharpness;
           this.activeHardness = hardness;
           this.cuts = 0;
           this.progressBar.style.width = "0%";
           this.wood.setAttribute('visible', 'true');
-          this.statusText.innerText = priceText;
-          this.statusText.style.color = "white";
+          this.statusText.innerText = text;
       }
     });
 
     document.addEventListener('DOMContentLoaded', () => {
         const scene = document.querySelector('a-scene');
-        const logic = () => scene.components['hand-saw-logic'];
-
         document.getElementById('btn-pine').addEventListener('click', () => {
             scene.emit('update-game', {s: 5, h: 50, t: 'Pine ($5)'});
         });
-        
         document.getElementById('btn-oak').addEventListener('click', () => {
             scene.emit('update-game', {s: 15, h: 150, t: 'Oak ($12)'});
         });
-
         scene.addEventListener('update-game', (e) => {
-             if(logic()) logic().updateSettings(e.detail.s, e.detail.h, e.detail.t);
+             const logic = scene.components['desktop-ar-logic'];
+             if(logic) logic.updateSettings(e.detail.s, e.detail.h, e.detail.t);
         });
     });
   </script>
 
   <style>
-    body { margin: 0; font-family: sans-serif; overflow: hidden; }
+    body { margin: 0; font-family: sans-serif; overflow: hidden; background: black; }
     
+    /* FIX 2: Z-INDEX LAYERING */
+    /* Ensure the 3D canvas is ALWAYS on top of the video feed */
+    canvas.a-canvas {
+        position: relative !important;
+        z-index: 100 !important;
+    }
+    video {
+        z-index: 1 !important;
+    }
+
     #hud-ui {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        pointer-events: none; z-index: 10;
+        pointer-events: none; z-index: 200; /* UI on top of everything */
         display: flex; flex-direction: column; justify-content: space-between;
     }
 
@@ -146,23 +163,21 @@
     }
 
     .bar-container {
-        width: 80%; height: 20px; background: #222; margin: 10px auto;
+        width: 60%; height: 20px; background: #222; margin: 10px auto;
         border: 1px solid #555; border-radius: 10px; overflow: hidden;
     }
     .bar-fill { width: 0%; height: 100%; background: #F96302; transition: width 0.1s; }
 
     .controls {
         pointer-events: auto; padding: 20px;
-        display: flex; flex-direction: column; gap: 15px; align-items: flex-start;
+        display: flex; gap: 15px; justify-content: center;
     }
     
     .btn {
         background: rgba(20,20,20,0.9); color: white; border: 1px solid #F96302;
-        padding: 15px; border-radius: 30px; font-weight: bold; width: 160px; text-align: left;
+        padding: 15px; border-radius: 8px; font-weight: bold; width: 150px; cursor: pointer;
     }
-    .btn:active { background: #F96302; color: black; }
-    
-    #guide-text { font-size: 20px; font-weight: bold; margin-top: 5px; text-shadow: 0 2px 2px #000; }
+    .btn:hover { background: #F96302; color: black; }
   </style>
 </head>
 <body>
@@ -171,43 +186,41 @@
     <div class="top-panel">
         <div id="status-text">Select Wood to Start</div>
         <div class="bar-container"><div id="progress-fill" class="bar-fill"></div></div>
-        <div id="guide-text">Waiting for Hand Marker...</div>
+        <div id="guide-text">Waiting for Marker...</div>
     </div>
-    
     <div class="controls">
-        <button id="btn-pine" class="btn">🌲 Soft Pine<br><span style="font-size:12px; color:#ccc">Easy Cut ($5)</span></button>
-        <button id="btn-oak" class="btn">🌳 Hard Oak<br><span style="font-size:12px; color:#ccc">Hard Cut ($12)</span></button>
+        <button id="btn-pine" class="btn">🌲 Soft Pine</button>
+        <button id="btn-oak" class="btn">🌳 Hard Oak</button>
     </div>
   </div>
 
   <a-scene 
-    hand-saw-logic
+    desktop-ar-logic
     mindar-image="imageTargetSrc: ./targets.mind; filterMinCF:0.0001; filterBeta: 0.001;" 
     color-space="sRGB" 
-    renderer="colorManagement: true, physicallyCorrectLights: true" 
-    vr-mode-ui="enabled: false" 
-    device-orientation-permission-ui="enabled: false">
+    renderer="colorManagement: true, physicallyCorrectLights: true, alpha: true" 
+    vr-mode-ui="enabled: false">
 
-    <a-camera position="0 0 0" look-controls="enabled: false">
-        
-        <a-entity id="hud-wood" position="0 -0.5 -2.0">
-            <a-box scale="2.5 0.15 0.8" color="#F4E3C1" shadow></a-box>
-            <a-box scale="2.52 0.17 0.82" material="wireframe: true; color: #000; opacity: 0.5"></a-box>
-        </a-entity>
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
-    </a-camera>
+    <a-entity id="floating-wood" position="0 0 -2">
+        <a-box scale="2 0.1 0.6" color="#F4E3C1" shadow></a-box>
+        <a-box scale="2.05 0.15 0.65" material="wireframe: true; color: #000; opacity: 0.5"></a-box>
+    </a-entity>
 
-    <a-light type="directional" intensity="1.2" position="0 1 1"></a-light>
+    <a-light type="directional" intensity="1" position="1 1 1"></a-light>
     <a-light type="ambient" intensity="0.6"></a-light>
 
     <a-entity mindar-image-target="targetIndex: 0">
         
-        <a-entity id="hand-saw" position="-0.5 0.5 0" rotation="0 90 0">
+        <a-entity id="hand-saw" position="0.5 0.5 -0.5" rotation="0 180 0">
              
-             <a-box id="saw-handle" position="0 0 0" scale="0.2 0.6 0.2" color="#F96302"></a-box>
+             <a-box id="saw-handle" position="0 0 0" scale="0.15 0.4 0.15" color="#F96302"></a-box>
              
-             <a-box id="saw-blade-visual" position="0 0 0.5" scale="0.04 0.4 1.5" color="#AAA" metalness="0.7" roughness="0.2"></a-box>
+             <a-box id="saw-blade-visual" position="0 -0.2 0.6" scale="0.05 0.3 1.2" color="#AAA" metalness="0.7" roughness="0.2"></a-box>
              
+             <a-box position="0 -0.35 0.6" scale="0.06 0.02 1.2" color="#333"></a-box>
+
         </a-entity>
 
     </a-entity>
