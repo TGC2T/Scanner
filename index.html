@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-  <title>AR Sawing (Fixed Layout)</title>
+  <title>AR Sawing</title>
   <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
 
@@ -110,54 +110,79 @@
 
     AFRAME.registerComponent('ar-game-logic', {
       init: function() {
-        this.wood = document.querySelector('#hud-wood');
-        this.saw = document.querySelector('#hand-saw');
         this.statusText = document.querySelector('#status-text');
         this.progressBar = document.querySelector('#progress-bar');
+        this.wood = null;
+        this.saw = null;
+        this.cutZone = null;
 
         this.cuts = 0;
         this.hardness = 100;
         this.gameActive = false;
         this.lastZ = null;
+        this.handVisible = false;
 
-        setTimeout(() => {
-          if (!this.gameActive) {
-            console.log("Force starting game logic...");
-            this.startGame();
+        this.el.sceneEl.addEventListener('loaded', () => {
+          this.wood = document.querySelector('#hud-wood');
+          this.saw = document.querySelector('#hand-saw');
+          this.cutZone = document.querySelector('#cut-zone');
+
+          if (!this.wood || !this.saw || !this.cutZone) {
+            this.statusText.innerText = 'Scene setup error';
+            this.statusText.style.color = '#ff5c5c';
+            return;
           }
-        }, 3000);
 
-        this.el.sceneEl.addEventListener('arReady', () => {
-          console.log("AR System Ready");
+          const markerTarget = document.querySelector('[mindar-image-target]');
+          if (markerTarget) {
+            markerTarget.addEventListener('targetFound', () => {
+              this.handVisible = true;
+              this.statusText.innerText = 'Marker found. Move saw to cut zone';
+              this.statusText.style.color = '#00FF00';
+            });
+            markerTarget.addEventListener('targetLost', () => {
+              this.handVisible = false;
+              this.lastZ = null;
+              this.statusText.innerText = 'Show marker to control saw';
+              this.statusText.style.color = '#ffd166';
+            });
+          }
+
           this.startGame();
         });
       },
 
       startGame: function() {
         this.gameActive = true;
-        this.statusText.innerText = "READY! Bring Hand Into View";
-        this.statusText.style.color = "#00FF00";
-        this.wood.setAttribute('visible', 'true');
+        this.statusText.innerText = 'Show marker to control saw';
+        this.statusText.style.color = '#ffd166';
+        if (this.wood) this.wood.setAttribute('visible', 'true');
       },
 
       tick: function() {
-        if (!this.gameActive) return;
+        if (!this.gameActive || !this.wood || !this.saw || !this.cutZone) return;
+        if (!this.handVisible) {
+          this.cutZone.setAttribute('color', 'lime');
+          return;
+        }
 
         const woodPos = new THREE.Vector3();
         const sawPos = new THREE.Vector3();
 
-        this.wood.querySelector('#cut-zone').object3D.getWorldPosition(woodPos);
+        this.cutZone.object3D.getWorldPosition(woodPos);
         this.saw.object3D.getWorldPosition(sawPos);
 
         const distance = woodPos.distanceTo(sawPos);
 
         if (distance < 0.8) {
-          this.wood.querySelector('#cut-zone').setAttribute('color', 'red');
-          this.statusText.innerText = "SAWING...";
+          this.cutZone.setAttribute('color', 'red');
+          this.statusText.innerText = 'SAWING...';
+          this.statusText.style.color = '#00FF00';
           this.processCut(sawPos.z);
         } else {
-          this.wood.querySelector('#cut-zone').setAttribute('color', 'lime');
-          this.statusText.innerText = "Move Hand Closer";
+          this.cutZone.setAttribute('color', 'lime');
+          this.statusText.innerText = 'Move marker closer to the cut zone';
+          this.statusText.style.color = '#ffd166';
           this.lastZ = null;
         }
       },
@@ -173,14 +198,16 @@
         if (delta > 0.003) {
           this.cuts += (delta * 500);
           const percent = Math.min((this.cuts / this.hardness) * 100, 100);
-          this.progressBar.style.width = percent + "%";
+          this.progressBar.style.width = percent + '%';
 
           const shake = (Math.random() - 0.5) * 0.05;
           this.wood.object3D.position.x = shake;
 
           if (this.cuts >= this.hardness) {
-            this.statusText.innerText = "CUT COMPLETE!";
+            this.statusText.innerText = 'CUT COMPLETE!';
+            this.statusText.style.color = '#00FF00';
             this.wood.setAttribute('visible', 'false');
+            this.gameActive = false;
           }
         }
         this.lastZ = currentZ;
@@ -192,7 +219,7 @@
 
   <div id="ui-layer">
     <div class="hud-box">
-      <div id="status-text">Initializing Camera...</div>
+      <div id="status-text">Show marker to control saw</div>
       <div class="progress-container"><div id="progress-bar" class="progress-bar"></div></div>
     </div>
   </div>
@@ -208,7 +235,7 @@
     <a-light type="ambient" intensity="0.8"></a-light>
 
     <a-camera position="0 0 0" look-controls="enabled: false">
-      <a-entity id="hud-wood" position="0 -0.5 -2" visible="false">
+      <a-entity id="hud-wood" position="0 -0.5 -2" visible="true">
         <a-box scale="2.5 0.1 0.8" color="#F4E3C1"></a-box>
         <a-box id="cut-zone" scale="2.6 0.5 1.0" material="wireframe: true; color: lime; opacity: 0.5"></a-box>
       </a-entity>
