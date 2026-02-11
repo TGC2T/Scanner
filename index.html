@@ -113,48 +113,31 @@
         this.statusText = document.querySelector('#status-text');
         this.progressBar = document.querySelector('#progress-bar');
         this.scene = this.el.sceneEl;
-        this.camera = null;
-        this.hudAnchor = null;
-        this.wood = null;
         this.saw = null;
-        this.cutZone = null;
 
         this.cuts = 0;
         this.hardness = 100;
-        this.gameActive = false;
         this.lastZ = null;
         this.handVisible = false;
-        this.arReady = false;
-        this.loadedAt = performance.now();
-        this.fallbackStarted = false;
+        this.gameActive = false;
 
-        this.tmpCameraPos = new THREE.Vector3();
-        this.tmpForward = new THREE.Vector3();
-        this.tmpWoodPos = new THREE.Vector3();
         this.tmpSawPos = new THREE.Vector3();
 
         this.scene.addEventListener('loaded', () => {
-          this.camera = this.scene.camera;
-          this.hudAnchor = document.querySelector('#hud-anchor');
-          this.wood = document.querySelector('#hud-wood');
           this.saw = document.querySelector('#hand-saw');
-          this.cutZone = document.querySelector('#cut-zone');
 
-          if (!this.camera || !this.hudAnchor || !this.wood || !this.saw || !this.cutZone) {
+          if (!this.saw) {
             this.statusText.innerText = 'Scene setup error';
             this.statusText.style.color = '#ff5c5c';
             return;
           }
 
-          this.wood.setAttribute('visible', 'false');
-          this.statusText.innerText = 'Initializing camera...';
-          this.statusText.style.color = '#ffd166';
-
           const markerTarget = document.querySelector('[mindar-image-target]');
           if (markerTarget) {
             markerTarget.addEventListener('targetFound', () => {
               this.handVisible = true;
-              this.statusText.innerText = 'Marker found. Move saw to cut zone';
+              this.lastZ = null;
+              this.statusText.innerText = 'Saw detected. Move it forward/back';
               this.statusText.style.color = '#00FF00';
             });
             markerTarget.addEventListener('targetLost', () => {
@@ -167,8 +150,9 @@
         });
 
         this.scene.addEventListener('arReady', () => {
-          this.arReady = true;
-          this.startGame();
+          this.gameActive = true;
+          this.statusText.innerText = 'Show marker to control saw';
+          this.statusText.style.color = '#ffd166';
         });
 
         this.scene.addEventListener('arError', () => {
@@ -177,62 +161,11 @@
         });
       },
 
-      startGame: function() {
-        if (!this.wood) return;
-        this.gameActive = true;
-        this.positionWoodInFrontOfCamera();
-        this.wood.setAttribute('visible', 'true');
-        this.statusText.innerText = 'Show marker to control saw';
-        this.statusText.style.color = '#ffd166';
-      },
-
-      positionWoodInFrontOfCamera: function() {
-        if (!this.camera || !this.hudAnchor) return;
-
-        this.camera.getWorldPosition(this.tmpCameraPos);
-        this.camera.getWorldDirection(this.tmpForward);
-        this.tmpForward.multiplyScalar(2.2);
-
-        this.hudAnchor.object3D.position.copy(this.tmpCameraPos).add(this.tmpForward);
-        this.hudAnchor.object3D.quaternion.copy(this.camera.quaternion);
-      },
-
       tick: function() {
-        if (!this.wood || !this.saw || !this.cutZone) return;
+        if (!this.gameActive || !this.saw || !this.handVisible) return;
 
-        const elapsed = performance.now() - this.loadedAt;
-        if (!this.arReady && !this.fallbackStarted && elapsed > 5000) {
-          this.fallbackStarted = true;
-          this.statusText.innerText = 'Camera ready fallback: board forced visible';
-          this.statusText.style.color = '#ffd166';
-          this.startGame();
-        }
-
-        if (!this.gameActive) return;
-
-        this.positionWoodInFrontOfCamera();
-
-        if (!this.handVisible) {
-          this.cutZone.setAttribute('color', 'lime');
-          return;
-        }
-
-        this.cutZone.object3D.getWorldPosition(this.tmpWoodPos);
         this.saw.object3D.getWorldPosition(this.tmpSawPos);
-
-        const distance = this.tmpWoodPos.distanceTo(this.tmpSawPos);
-
-        if (distance < 0.8) {
-          this.cutZone.setAttribute('color', 'red');
-          this.statusText.innerText = 'SAWING...';
-          this.statusText.style.color = '#00FF00';
-          this.processCut(this.tmpSawPos.z);
-        } else {
-          this.cutZone.setAttribute('color', 'lime');
-          this.statusText.innerText = 'Move marker closer to the cut zone';
-          this.statusText.style.color = '#ffd166';
-          this.lastZ = null;
-        }
+        this.processCut(this.tmpSawPos.z);
       },
 
       processCut: function(currentZ) {
@@ -247,17 +180,16 @@
           this.cuts += (delta * 500);
           const percent = Math.min((this.cuts / this.hardness) * 100, 100);
           this.progressBar.style.width = percent + '%';
-
-          const shake = (Math.random() - 0.5) * 0.05;
-          this.wood.object3D.position.x = shake;
+          this.statusText.innerText = 'SAWING...';
+          this.statusText.style.color = '#00FF00';
 
           if (this.cuts >= this.hardness) {
             this.statusText.innerText = 'CUT COMPLETE!';
             this.statusText.style.color = '#00FF00';
-            this.wood.setAttribute('visible', 'false');
             this.gameActive = false;
           }
         }
+
         this.lastZ = currentZ;
       }
     });
@@ -267,7 +199,7 @@
 
   <div id="ui-layer">
     <div class="hud-box">
-      <div id="status-text">Show marker to control saw</div>
+      <div id="status-text">Initializing camera...</div>
       <div class="progress-container"><div id="progress-bar" class="progress-bar"></div></div>
     </div>
   </div>
@@ -281,13 +213,6 @@
 
     <a-light type="directional" intensity="1" position="1 1 1"></a-light>
     <a-light type="ambient" intensity="0.8"></a-light>
-
-    <a-entity id="hud-anchor">
-      <a-entity id="hud-wood" position="0 -0.5 -2" visible="true">
-        <a-box scale="2.5 0.1 0.8" color="#F4E3C1"></a-box>
-        <a-box id="cut-zone" scale="2.6 0.5 1.0" material="wireframe: true; color: lime; opacity: 0.5"></a-box>
-      </a-entity>
-    </a-entity>
 
     <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
