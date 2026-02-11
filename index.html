@@ -2,150 +2,215 @@
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-  <title>AR Sawing (Fixed Layout)</title>
+  <title>AR Sawing</title>
   <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
 
   <style>
-    /* 1. AGGRESSIVE FULLSCREEN CSS */
-    html, body {
-        margin: 0; padding: 0; width: 100%; height: 100%;
-        overflow: hidden; background-color: black;
+    :root {
+      --app-height: 100vh;
     }
 
-    /* Force the container A-Frame creates to be full screen */
-    #aframe-container {
-        width: 100% !important; height: 100% !important;
-        position: absolute; top: 0; left: 0;
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: var(--app-height);
+      overflow: hidden;
+      background: #000;
+      position: fixed;
+      inset: 0;
     }
 
-    /* Force the webcam video to cover the screen */
-    video {
-        width: 100% !important; height: 100% !important;
-        object-fit: cover !important;
-        position: absolute !important;
-        top: 0; left: 0;
-        z-index: 0 !important;
+    a-scene {
+      position: fixed !important;
+      inset: 0 !important;
+      width: 100vw !important;
+      height: var(--app-height) !important;
+      z-index: 1;
     }
 
-    /* Force the 3D Canvas on top */
+    /* MindAR webcam layer */
+    video.mindar-video {
+      position: fixed !important;
+      inset: 0 !important;
+      width: 100vw !important;
+      height: var(--app-height) !important;
+      object-fit: cover !important;
+      z-index: 1 !important;
+      background: #000 !important;
+    }
+
+    /* A-Frame render layer */
     canvas.a-canvas {
-        width: 100% !important; height: 100% !important;
-        position: absolute !important;
-        top: 0; left: 0;
-        z-index: 100 !important;
-        background-color: transparent !important;
+      position: fixed !important;
+      inset: 0 !important;
+      width: 100vw !important;
+      height: var(--app-height) !important;
+      z-index: 2 !important;
+      background: transparent !important;
+      pointer-events: none;
     }
 
-    /* UI Layer on top of everything */
+    /* Hide default MindAR scanning overlay; we provide our own HUD */
+    .mindar-ui-overlay,
+    .mindar-ui-scanning,
+    .mindar-ui-loading {
+      display: none !important;
+    }
+
     #ui-layer {
-        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-        z-index: 999; pointer-events: none;
-        display: flex; flex-direction: column; align-items: center;
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
 
     .hud-box {
-        margin-top: 20px;
-        background: rgba(0, 0, 0, 0.7);
-        padding: 15px 25px;
-        border-radius: 30px;
-        border: 2px solid #F96302;
-        color: white; font-family: sans-serif; font-weight: bold;
-        text-align: center;
+      margin-top: 20px;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 15px 25px;
+      border-radius: 30px;
+      border: 2px solid #F96302;
+      color: white;
+      font-family: sans-serif;
+      font-weight: bold;
+      text-align: center;
     }
-    
+
     .progress-container {
-        width: 200px; height: 10px; background: #333; margin-top: 10px;
-        border-radius: 5px; overflow: hidden;
+      width: 200px;
+      height: 10px;
+      background: #333;
+      margin-top: 10px;
+      border-radius: 5px;
+      overflow: hidden;
     }
-    .progress-bar { width: 0%; height: 100%; background: #00FF00; transition: width 0.1s; }
+
+    .progress-bar {
+      width: 0%;
+      height: 100%;
+      background: #00FF00;
+      transition: width 0.1s;
+    }
   </style>
 
   <script>
+    const syncViewportHeight = () => {
+      document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+    };
+
+    window.addEventListener('resize', syncViewportHeight);
+    window.addEventListener('orientationchange', syncViewportHeight);
+    syncViewportHeight();
+
     AFRAME.registerComponent('ar-game-logic', {
       init: function() {
-        this.wood = document.querySelector('#hud-wood');
-        this.saw = document.querySelector('#hand-saw');
         this.statusText = document.querySelector('#status-text');
         this.progressBar = document.querySelector('#progress-bar');
-        
+        this.wood = null;
+        this.saw = null;
+        this.cutZone = null;
+
         this.cuts = 0;
         this.hardness = 100;
         this.gameActive = false;
-        
-        // --- FIX 2: FORCE START TIMER ---
-        // If AR doesn't load in 3 seconds, force the UI to ready anyway
-        setTimeout(() => {
-            if (!this.gameActive) {
-                console.log("Force starting game logic...");
-                this.startGame();
-            }
-        }, 3000);
+        this.lastZ = null;
+        this.handVisible = false;
 
-        // Listen for AR Ready (The 'correct' way)
-        this.el.sceneEl.addEventListener('arReady', () => {
-            console.log("AR System Ready");
-            this.startGame();
+        this.el.sceneEl.addEventListener('loaded', () => {
+          this.wood = document.querySelector('#hud-wood');
+          this.saw = document.querySelector('#hand-saw');
+          this.cutZone = document.querySelector('#cut-zone');
+
+          if (!this.wood || !this.saw || !this.cutZone) {
+            this.statusText.innerText = 'Scene setup error';
+            this.statusText.style.color = '#ff5c5c';
+            return;
+          }
+
+          const markerTarget = document.querySelector('[mindar-image-target]');
+          if (markerTarget) {
+            markerTarget.addEventListener('targetFound', () => {
+              this.handVisible = true;
+              this.statusText.innerText = 'Marker found. Move saw to cut zone';
+              this.statusText.style.color = '#00FF00';
+            });
+            markerTarget.addEventListener('targetLost', () => {
+              this.handVisible = false;
+              this.lastZ = null;
+              this.statusText.innerText = 'Show marker to control saw';
+              this.statusText.style.color = '#ffd166';
+            });
+          }
+
+          this.startGame();
         });
       },
 
       startGame: function() {
-          this.gameActive = true;
-          this.statusText.innerText = "READY! Bring Hand Into View";
-          this.statusText.style.color = "#00FF00";
-          this.wood.setAttribute('visible', 'true');
+        this.gameActive = true;
+        this.statusText.innerText = 'Show marker to control saw';
+        this.statusText.style.color = '#ffd166';
+        if (this.wood) this.wood.setAttribute('visible', 'true');
       },
 
       tick: function() {
-        if (!this.gameActive) return;
+        if (!this.gameActive || !this.wood || !this.saw || !this.cutZone) return;
+        if (!this.handVisible) {
+          this.cutZone.setAttribute('color', 'lime');
+          return;
+        }
 
-        // Get World Positions
         const woodPos = new THREE.Vector3();
         const sawPos = new THREE.Vector3();
-        
-        // We target the 'cut-zone' child for better accuracy
-        this.wood.querySelector('#cut-zone').object3D.getWorldPosition(woodPos);
+
+        this.cutZone.object3D.getWorldPosition(woodPos);
         this.saw.object3D.getWorldPosition(sawPos);
 
-        // Distance Check (0.8 meters tolerance)
         const distance = woodPos.distanceTo(sawPos);
 
         if (distance < 0.8) {
-            this.wood.querySelector('#cut-zone').setAttribute('color', 'red');
-            this.statusText.innerText = "SAWING...";
-            this.processCut(sawPos.z);
+          this.cutZone.setAttribute('color', 'red');
+          this.statusText.innerText = 'SAWING...';
+          this.statusText.style.color = '#00FF00';
+          this.processCut(sawPos.z);
         } else {
-            this.wood.querySelector('#cut-zone').setAttribute('color', 'lime');
-            this.statusText.innerText = "Move Hand Closer";
-            this.lastZ = null;
+          this.cutZone.setAttribute('color', 'lime');
+          this.statusText.innerText = 'Move marker closer to the cut zone';
+          this.statusText.style.color = '#ffd166';
+          this.lastZ = null;
         }
       },
 
       processCut: function(currentZ) {
-          if (this.lastZ === null) {
-              this.lastZ = currentZ;
-              return;
-          }
-          
-          // Calculate movement
-          const delta = Math.abs(currentZ - this.lastZ);
-          
-          // Threshold (prevent jitter counting as cuts)
-          if (delta > 0.003) {
-              this.cuts += (delta * 500); // Speed multiplier
-              const percent = Math.min((this.cuts / this.hardness) * 100, 100);
-              this.progressBar.style.width = percent + "%";
-              
-              // Shake effect
-              const shake = (Math.random() - 0.5) * 0.05;
-              this.wood.object3D.position.x = shake;
-              
-              if (this.cuts >= this.hardness) {
-                  this.statusText.innerText = "CUT COMPLETE!";
-                  this.wood.setAttribute('visible', 'false');
-              }
-          }
+        if (this.lastZ === null) {
           this.lastZ = currentZ;
+          return;
+        }
+
+        const delta = Math.abs(currentZ - this.lastZ);
+
+        if (delta > 0.003) {
+          this.cuts += (delta * 500);
+          const percent = Math.min((this.cuts / this.hardness) * 100, 100);
+          this.progressBar.style.width = percent + '%';
+
+          const shake = (Math.random() - 0.5) * 0.05;
+          this.wood.object3D.position.x = shake;
+
+          if (this.cuts >= this.hardness) {
+            this.statusText.innerText = 'CUT COMPLETE!';
+            this.statusText.style.color = '#00FF00';
+            this.wood.setAttribute('visible', 'false');
+            this.gameActive = false;
+          }
+        }
+        this.lastZ = currentZ;
       }
     });
   </script>
@@ -154,35 +219,33 @@
 
   <div id="ui-layer">
     <div class="hud-box">
-        <div id="status-text">Initializing Camera...</div>
-        <div class="progress-container"><div id="progress-bar" class="progress-bar"></div></div>
+      <div id="status-text">Show marker to control saw</div>
+      <div class="progress-container"><div id="progress-bar" class="progress-bar"></div></div>
     </div>
   </div>
 
-  <a-scene 
+  <a-scene
     ar-game-logic
-    mindar-image="imageTargetSrc: ./targets.mind; filterMinCF:0.0001; filterBeta: 0.001; uiScanning: no;" 
-    color-space="sRGB" 
-    renderer="colorManagement: true, physicallyCorrectLights: true, alpha: true" 
+    mindar-image="imageTargetSrc: ./targets.mind; filterMinCF:0.0001; filterBeta: 0.001; uiScanning: no;"
+    color-space="sRGB"
+    renderer="colorManagement: true, physicallyCorrectLights: true, alpha: true"
     vr-mode-ui="enabled: false">
 
     <a-light type="directional" intensity="1" position="1 1 1"></a-light>
     <a-light type="ambient" intensity="0.8"></a-light>
 
     <a-camera position="0 0 0" look-controls="enabled: false">
-        
-        <a-entity id="hud-wood" position="0 -0.5 -2" visible="false">
-             <a-box scale="2.5 0.1 0.8" color="#F4E3C1"></a-box>
-             <a-box id="cut-zone" scale="2.6 0.5 1.0" material="wireframe: true; color: lime; opacity: 0.5"></a-box>
-        </a-entity>
-
+      <a-entity id="hud-wood" position="0 -0.5 -2" visible="true">
+        <a-box scale="2.5 0.1 0.8" color="#F4E3C1"></a-box>
+        <a-box id="cut-zone" scale="2.6 0.5 1.0" material="wireframe: true; color: lime; opacity: 0.5"></a-box>
+      </a-entity>
     </a-camera>
 
     <a-entity mindar-image-target="targetIndex: 0">
-        <a-entity id="hand-saw" position="0.5 0.2 0" rotation="0 180 0">
-             <a-box scale="0.15 0.4 0.15" color="orange"></a-box>
-             <a-box position="0 -0.2 0.6" scale="0.05 0.3 1.2" color="silver"></a-box>
-        </a-entity>
+      <a-entity id="hand-saw" position="0.5 0.2 0" rotation="0 180 0">
+        <a-box scale="0.15 0.4 0.15" color="orange"></a-box>
+        <a-box position="0 -0.2 0.6" scale="0.05 0.3 1.2" color="silver"></a-box>
+      </a-entity>
     </a-entity>
 
   </a-scene>
