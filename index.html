@@ -125,6 +125,8 @@
         this.lastZ = null;
         this.handVisible = false;
         this.arReady = false;
+        this.loadedAt = performance.now();
+        this.fallbackStarted = false;
 
         this.tmpCameraPos = new THREE.Vector3();
         this.tmpForward = new THREE.Vector3();
@@ -168,9 +170,15 @@
           this.arReady = true;
           this.startGame();
         });
+
+        this.scene.addEventListener('arError', () => {
+          this.statusText.innerText = 'Camera error. Check permissions and reload';
+          this.statusText.style.color = '#ff5c5c';
+        });
       },
 
       startGame: function() {
+        if (!this.wood) return;
         this.gameActive = true;
         this.positionWoodInFrontOfCamera();
         this.wood.setAttribute('visible', 'true');
@@ -190,7 +198,17 @@
       },
 
       tick: function() {
-        if (!this.arReady || !this.gameActive || !this.wood || !this.saw || !this.cutZone) return;
+        if (!this.wood || !this.saw || !this.cutZone) return;
+
+        const elapsed = performance.now() - this.loadedAt;
+        if (!this.arReady && !this.fallbackStarted && elapsed > 5000) {
+          this.fallbackStarted = true;
+          this.statusText.innerText = 'Camera ready fallback: board forced visible';
+          this.statusText.style.color = '#ffd166';
+          this.startGame();
+        }
+
+        if (!this.gameActive) return;
 
         this.positionWoodInFrontOfCamera();
 
