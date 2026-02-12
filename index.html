@@ -2,29 +2,73 @@
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-  <title>AR Sawing: Velocity Filtered</title>
+  <title>AR Sawing: Shop & Manual Video</title>
   <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
 
   <style>
-    :root { --app-height: 100vh; --primary: #F96302; }
-    html, body { margin: 0; padding: 0; width: 100%; height: var(--app-height); overflow: hidden; background-color: black; font-family: sans-serif; }
-    #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 999; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
-    
-    .hud-top { margin-top: 20px; align-self: center; background: rgba(0,0,0,0.8); padding: 15px 30px; border-radius: 30px; border: 2px solid var(--primary); color: white; text-align: center; pointer-events: auto; }
-    .progress-track { width: 250px; height: 12px; background: #333; margin-top: 8px; border-radius: 6px; overflow: hidden; }
+    :root { --app-height: 100vh; --primary: #F96302; --bg-dark: rgba(0,0,0,0.85); }
+    html, body { margin: 0; padding: 0; width: 100%; height: var(--app-height); overflow: hidden; background-color: black; font-family: 'Segoe UI', Roboto, sans-serif; }
+
+    /* MANUAL CAMERA FEED (The Fix) */
+    #manual-video {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        object-fit: cover; z-index: -1; /* Behind everything */
+    }
+
+    /* UI LAYER */
+    #ui-layer {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        z-index: 999; pointer-events: none;
+        display: flex; flex-direction: column; justify-content: space-between;
+    }
+
+    .hud-top {
+        margin-top: 20px; align-self: center; background: var(--bg-dark);
+        padding: 12px 25px; border-radius: 50px; border: 2px solid var(--primary);
+        color: white; text-align: center; pointer-events: auto;
+    }
+    .progress-track { width: 220px; height: 10px; background: #333; margin-top: 8px; border-radius: 5px; overflow: hidden; }
     .progress-bar { width: 0%; height: 100%; background: #00FF00; transition: width 0.1s; }
 
-    .shop-panel { background: rgba(0,0,0,0.9); border-top: 2px solid var(--primary); padding: 15px; pointer-events: auto; display: flex; gap: 10px; }
-    .shop-group { display: flex; flex-direction: column; gap: 5px; flex: 1; }
-    .shop-label { color: #888; font-size: 10px; text-transform: uppercase; }
-    .btn { flex: 1; padding: 10px; border: 1px solid #444; background: #222; color: white; border-radius: 8px; cursor: pointer; }
-    .btn.active { background: var(--primary); color: white; border-color: white; }
+    /* SHOP UI */
+    .shop-panel {
+        background: var(--bg-dark); border-top: 3px solid var(--primary);
+        padding: 15px; pointer-events: auto; display: flex; gap: 12px;
+    }
+    .shop-group { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+    .shop-label { color: var(--primary); font-size: 11px; font-weight: bold; text-transform: uppercase; }
+    
+    .btn {
+        flex: 1; padding: 12px; border: 1px solid #444; background: #1a1a1a;
+        color: white; border-radius: 10px; cursor: pointer; text-align: center;
+        display: flex; flex-direction: column; transition: 0.2s;
+    }
+    .btn b { font-size: 14px; margin-bottom: 2px; }
+    .btn span { font-size: 11px; color: #00FF00; font-weight: bold; }
+    .btn.active { background: var(--primary); border-color: white; }
+    .btn.active span { color: #330000; }
   </style>
 
   <script>
+    // 1. MANUAL CAMERA HANDLER
+    async function startManualCamera() {
+        const video = document.getElementById('manual-video');
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment", width: 1280, height: 720 } 
+            });
+            video.srcObject = stream;
+            video.play();
+        } catch (err) {
+            console.error("Manual Camera Failed: ", err);
+        }
+    }
+
     AFRAME.registerComponent('ar-saw-logic', {
       init: function() {
+        startManualCamera(); // Start the backup feed immediately
+
         this.wood = document.querySelector('#hud-wood');
         this.saw = document.querySelector('#hand-saw');
         this.statusText = document.querySelector('#status-text');
@@ -40,13 +84,13 @@
         this.el.sceneEl.addEventListener('arReady', () => {
             this.gameActive = true;
             this.wood.setAttribute('visible', 'true');
-            this.statusText.innerText = "Ready to Saw";
+            this.statusText.innerText = "Align Saw with Wood";
         });
 
         const sawTarget = document.querySelector('#saw-target');
         sawTarget.addEventListener('targetFound', () => { 
             this.sawVisible = true; 
-            this.lastZ = null; // Important: reset so first frame doesn't jump
+            this.lastZ = null;
         });
         sawTarget.addEventListener('targetLost', () => { this.sawVisible = false; });
 
@@ -54,126 +98,116 @@
       },
 
       setupButtons: function() {
-          document.getElementById('btn-pine').addEventListener('click', (e) => this.resetBoard(100, '#F4E3C1', 'Pine', e.currentTarget));
-          document.getElementById('btn-oak').addEventListener('click', (e) => this.resetBoard(300, '#8B5A2B', 'Oak', e.currentTarget));
-          document.getElementById('btn-rusty').addEventListener('click', (e) => this.setSaw(1, 'silver', e.currentTarget));
-          document.getElementById('btn-diamond').addEventListener('click', (e) => this.setSaw(4, '#00FFFF', e.currentTarget));
+          // Wood selection with pricing
+          document.getElementById('btn-pine').addEventListener('click', (e) => this.resetBoard(100, '#F4E3C1', 'Pine ($5)', e.currentTarget, 'wood'));
+          document.getElementById('btn-oak').addEventListener('click', (e) => this.resetBoard(350, '#8B5A2B', 'Oak ($15)', e.currentTarget, 'wood'));
+          
+          // Saw selection with pricing
+          document.getElementById('btn-rusty').addEventListener('click', (e) => this.setSaw(1, 'silver', 'Rusty (Free)', e.currentTarget));
+          document.getElementById('btn-pro').addEventListener('click', (e) => this.setSaw(5, '#00FFFF', 'Pro ($50)', e.currentTarget));
       },
 
-      resetBoard: function(hard, color, name, btn) {
+      resetBoard: function(hard, color, name, btn, type) {
           this.hardness = hard;
           this.cuts = 0;
           this.lastZ = null;
           this.progressBar.style.width = '0%';
           this.wood.setAttribute('visible', 'true');
           this.wood.querySelector('.wood-visual').setAttribute('color', color);
-          this.statusText.innerText = "Selected: " + name;
-          document.querySelectorAll('.shop-group:nth-child(1) .btn').forEach(b => b.classList.remove('active'));
+          this.statusText.innerText = "Working with: " + name;
+          
+          document.querySelectorAll('.shop-group:first-child .btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
       },
 
-      setSaw: function(sharp, color, btn) {
+      setSaw: function(sharp, color, name, btn) {
           this.sharpness = sharp;
           this.saw.querySelector('.blade-visual').setAttribute('color', color);
-          document.querySelectorAll('.shop-group:nth-child(2) .btn').forEach(b => b.classList.remove('active'));
+          this.statusText.innerText = "Equipped: " + name;
+          
+          document.querySelectorAll('.shop-group:last-child .btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
       },
 
-      // Use A-Frame's built-in timeDelta (ms since last frame)
       tick: function(time, timeDelta) {
         if (!this.gameActive || !this.sawVisible || !timeDelta) return;
 
         const sawPos = new THREE.Vector3();
         this.saw.object3D.getWorldPosition(sawPos);
 
-        this.processCut(sawPos.z, timeDelta);
-      },
+        if (this.lastZ === null) { this.lastZ = sawPos.z; return; }
+        
+        const dist = Math.abs(sawPos.z - this.lastZ);
+        const velocity = dist / (timeDelta / 1000);
 
-      processCut: function(currentZ, dt) {
-          // Initialize lastZ if this is the first frame tracking the saw
-          if (this.lastZ === null) {
-              this.lastZ = currentZ;
-              return;
-          }
-          
-          const distanceMoved = Math.abs(currentZ - this.lastZ);
-          
-          // Calculate Velocity (meters per second)
-          // dt is in milliseconds, so we convert to seconds
-          const velocity = distanceMoved / (dt / 1000);
+        // FILTER: Velocity must be human-like (between 0.2m/s and 3.5m/s)
+        if (velocity > 0.2 && velocity < 3.5) {
+            this.statusText.innerText = "SAWING...";
+            this.cuts += (dist * 45 * this.sharpness);
+            
+            const percent = Math.min((this.cuts / this.hardness) * 100, 100);
+            this.progressBar.style.width = percent + "%";
+            this.wood.object3D.position.x = (Math.random() - 0.5) * 0.015;
 
-          /**
-           * THE FILTER LOGIC:
-           * 1. velocity > 0.15: Only count if moving faster than 15cm/sec (filters jitter)
-           * 2. velocity < 4.0: Ignore "teleporting" glitches (filters tracking jumps)
-           */
-          if (velocity > 0.15 && velocity < 4.0) {
-              
-              this.statusText.innerText = "SAWING...";
-              
-              // Progress = distance moved * sharpness. 
-              // We don't need a huge multiplier anymore because we're capturing real movement.
-              const cutEfficiency = 40; 
-              this.cuts += (distanceMoved * cutEfficiency * this.sharpness);
-              
-              const percent = Math.min((this.cuts / this.hardness) * 100, 100);
-              this.progressBar.style.width = percent + "%";
-              
-              // Visual feedback
-              this.wood.object3D.position.x = (Math.random() - 0.5) * 0.01;
-
-              if (this.cuts >= this.hardness) {
-                  this.statusText.innerText = "CUT COMPLETE!";
-                  this.wood.setAttribute('visible', 'false');
-                  this.lastZ = null;
-              }
-          } else {
-              // If stationary or jittering, slightly reset wood position
-              this.wood.object3D.position.x = 0;
-          }
-
-          this.lastZ = currentZ;
+            if (this.cuts >= this.hardness) {
+                this.statusText.innerText = "CUT COMPLETE!";
+                this.wood.setAttribute('visible', 'false');
+                this.lastZ = null;
+            }
+        }
+        this.lastZ = sawPos.z;
       }
     });
   </script>
 </head>
 <body>
 
+  <video id="manual-video" autoplay muted playsinline></video>
+
   <div id="ui-layer">
     <div class="hud-top">
-        <div id="status-text">Scanning for Saw...</div>
+        <div id="status-text">Scanning for Marker...</div>
         <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
     </div>
 
     <div class="shop-panel">
         <div class="shop-group">
-            <div class="shop-label">Wood</div>
-            <button id="btn-pine" class="btn active">Pine</button>
-            <button id="btn-oak" class="btn">Oak</button>
+            <div class="shop-label">Lumber Yard</div>
+            <div style="display:flex; gap:5px;">
+                <button id="btn-pine" class="btn active"><b>Pine</b><span>$5.00</span></button>
+                <button id="btn-oak" class="btn"><b>Oak</b><span>$15.00</span></button>
+            </div>
         </div>
         <div class="shop-group">
-            <div class="shop-label">Saw</div>
-            <button id="btn-rusty" class="btn active">Steel</button>
-            <button id="btn-diamond" class="btn">Pro</button>
+            <div class="shop-label">Hardware Store</div>
+            <div style="display:flex; gap:5px;">
+                <button id="btn-rusty" class="btn active"><b>Steel</b><span>FREE</span></button>
+                <button id="btn-pro" class="btn"><b>Laser</b><span>$50.00</span></button>
+            </div>
         </div>
     </div>
   </div>
 
-  <a-scene ar-saw-logic mindar-image="imageTargetSrc: ./targets.mind; uiScanning: no;" color-space="sRGB" renderer="colorManagement: true, alpha: true" vr-mode-ui="enabled: false">
+  <a-scene 
+    ar-saw-logic 
+    mindar-image="imageTargetSrc: ./targets.mind; uiScanning: no;" 
+    color-space="sRGB" 
+    renderer="colorManagement: true, alpha: true, antialias: true" 
+    vr-mode-ui="enabled: false">
     
-    <a-light type="ambient" intensity="0.7"></a-light>
-    <a-light type="directional" position="1 2 1"></a-light>
+    <a-light type="ambient" intensity="0.8"></a-light>
+    <a-light type="directional" position="1 2 1" intensity="0.5"></a-light>
 
-    <a-camera position="0 0 0" look-controls="enabled: false">
-        <a-entity id="hud-wood" position="0 -0.4 -1.2" visible="false">
-             <a-box class="wood-visual" scale="1.5 0.08 0.5" color="#F4E3C1"></a-box>
-             <a-box scale="1.6 0.2 0.55" material="wireframe: true; color: lime; opacity: 0.2"></a-box>
-        </a-entity>
-    </a-camera>
+    <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
+
+    <a-entity id="hud-wood" position="0 -0.4 -1.2" visible="false">
+         <a-box class="wood-visual" scale="1.4 0.08 0.5" color="#F4E3C1"></a-box>
+         <a-box scale="1.45 0.15 0.52" material="wireframe: true; color: #F96302; opacity: 0.3"></a-box>
+    </a-entity>
 
     <a-entity id="saw-target" mindar-image-target="targetIndex: 0">
         <a-entity id="hand-saw" rotation="0 -90 0">
-             <a-box position="0 0 0.1" scale="0.08 0.25 0.08" color="#555"></a-box> <a-box class="blade-visual" position="0.3 0 0.1" scale="0.6 0.15 0.01" color="silver"></a-box>
+             <a-box position="0 0 0.1" scale="0.08 0.25 0.08" color="#333"></a-box> <a-box class="blade-visual" position="0.3 0 0.1" scale="0.6 0.15 0.01" color="silver" metalness="0.8" roughness="0.2"></a-box>
         </a-entity>
     </a-entity>
   </a-scene>
