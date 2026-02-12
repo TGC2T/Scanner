@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>AR Sawing (Fixed Layout)</title>
+  <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
+
+  <style>
+    /* 1. AGGRESSIVE FULLSCREEN CSS */
+    :root {
+      --app-height: 100vh;
+    }
+
+    html, body {
+        margin: 0; padding: 0; width: 100%; height:  var(--app-height);
+        overflow: hidden; background-color: black;
+    }
+
+    /* Force the container A-Frame creates to be full screen */
+    #aframe-container {
+        width: 100% !important; height: 100% !important;
+        position: absolute; top: 0; left: 0;
+    }
+
+    /* Force the webcam video to cover the screen */
+    video {
+        width: 100% !important; height: var(--app-height) !important;
+        object-fit: cover !important;
+        position: absolute !important;
+        top: 0; left: 0;
+        z-index: 0 !important;
+    }
+
+    /* Force the 3D Canvas on top */
+    canvas.a-canvas {
+        width: 100% !important; height: 100% !important;
+        position: absolute !important;
+        top: 0; left: 0;
+        z-index: 100 !important;
+        background-color: transparent !important;
+    }
+
+    /* UI Layer on top of everything */
+    #ui-layer {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        z-index: 999; pointer-events: none;
+        display: flex; flex-direction: column; align-items: center;
+    }
+
+    .hud-box {
+        margin-top: 20px;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 15px 25px;
+        border-radius: 30px;
+        border: 2px solid #F96302;
+        color: white; font-family: sans-serif; font-weight: bold;
+        text-align: center;
+    }
+    
+    .progress-container {
+        width: 200px; height: 10px; background: #333; margin-top: 10px;
+        border-radius: 5px; overflow: hidden;
+    }
+    .progress-bar { width: 0%; height: 100%; background: #00FF00; transition: width 0.1s; }
+  </style>
+
+  <script>
+    AFRAME.registerComponent('ar-game-logic', {
+      init: function() {
+        this.wood = document.querySelector('#hud-wood');
+        this.saw = document.querySelector('#hand-saw');
+        this.boardTarget = document.querySelector('#board-target');
+        this.sawTarget = document.querySelector('#saw-target');
+        this.cutZone = document.querySelector('#cut-zone');
+        this.statusText = document.querySelector('#status-text');
+        this.progressBar = document.querySelector('#progress-bar');
+        
+        this.cuts = 0;
+        this.hardness = 100;
+        this.lastZ = null;
+        this.gameActive = false;
+        this.boardVisible = false;
+        this.sawVisible = false;
+        this.tmpWoodPos = new THREE.Vector3();
+        this.tmpSawPos = new THREE.Vector3();
+        
+        this.el.sceneEl.addEventListener('arReady', () => {
+            this.gameActive = true;
+            this.statusText.innerText = "Show BOTH targets (board + saw)";
+            this.statusText.style.color = "#ffd166";
+        });
+
+        this.el.sceneEl.addEventListener('arError', () => {
+            this.statusText.innerText = "Camera error. Check permissions and reload";
+            this.statusText.style.color = "#ff5c5c";
+        });
+
+        this.boardTarget.addEventListener('targetFound', () => {
+          this.boardVisible = true;
+          this.wood.setAttribute('visible', 'true');
+          this.updateStatus();
+        });
+
+        this.boardTarget.addEventListener('targetLost', () => {
+          this.boardVisible = false;
+          this.wood.setAttribute('visible', 'false');
+          this.cutZone.setAttribute('color', 'lime');
+          this.lastZ = null;
+          this.updateStatus();
+        });
+
+        this.sawTarget.addEventListener('targetFound', () => {
+          this.sawVisible = true;
+          this.lastZ = null;
+          this.updateStatus();
+        });
+
+        this.sawTarget.addEventListener('targetLost', () => {
+          this.sawVisible = false;
+          this.lastZ = null;
+          this.updateStatus();
+        });
+      },
+
+      updateStatus: function() {
+          if (!this.gameActive) return;
+
+          if (!this.boardVisible && !this.sawVisible) {
+            this.statusText.innerText = "Show BOTH targets (board + saw)";
+            this.statusText.style.color = "#ffd166";
+            return;
+          }
+
+          if (!this.boardVisible) {
+            this.statusText.innerText = "Show board target";
+            this.statusText.style.color = "#ffd166";
+            return;
+          }
+
+          if (!this.sawVisible) {
+            this.statusText.innerText = "Show saw target";
+            this.statusText.style.color = "#ffd166";
+            return;
+          }
+
+          this.statusText.innerText = "READY! Move saw near board";
+          this.statusText.style.color = "#00FF00";
+      },
+
+      tick: function() {
+        if (!this.gameActive || !this.boardVisible || !this.sawVisible) return;
+
+        this.cutZone.object3D.getWorldPosition(this.tmpWoodPos);
+        this.saw.object3D.getWorldPosition(this.tmpSawPos);
+
+        // Distance Check (0.8 meters tolerance)
+        const distance = this.tmpWoodPos.distanceTo(this.tmpSawPos);
+
+        if (distance < 0.8) {
+            this.cutZone.setAttribute('color', 'red');
+            this.statusText.innerText = "SAWING...";
+            this.processCut(this.tmpSawPos.z);
+        } else {
+            this.cutZone.setAttribute('color', 'lime');
+            this.statusText.innerText = "Move Hand Closer";
+            this.statusText.style.color = "#ffd166";
+            this.lastZ = null;
+        }
+      },
+
+      processCut: function(currentZ) {
+          if (this.lastZ === null) {
+              this.lastZ = currentZ;
+              return;
+          }
+          
+          // Calculate movement
+          const delta = Math.abs(currentZ - this.lastZ);
+          
+          // Threshold (prevent jitter counting as cuts)
+          if (delta > 0.003) {
+              this.cuts += (delta * 500); // Speed multiplier
+              const percent = Math.min((this.cuts / this.hardness) * 100, 100);
+              this.progressBar.style.width = percent + "%";
+              
+              // Shake effect
+              const shake = (Math.random() - 0.5) * 0.05;
+              this.wood.object3D.position.x = shake;
+              
+              if (this.cuts >= this.hardness) {
+                  this.statusText.innerText = "CUT COMPLETE!";
+                  this.statusText.style.color = "#00FF00";
+                  this.wood.setAttribute('visible', 'false');
+              }
+          }
+          this.lastZ = currentZ;
+      }
+    });
+  </script>
+</head>
+<body>
+
+  <div id="ui-layer">
+    <div class="hud-box">
+        <div id="status-text">Initializing Camera...</div>
+        <div class="progress-container"><div id="progress-bar" class="progress-bar"></div></div>
+    </div>
+  </div>
+
+  <a-scene 
+    ar-game-logic
+    mindar-image="imageTargetSrc: ./targets.mind; maxTrack: 2; filterMinCF: 0.0001; filterBeta: 0.001; uiScanning: no;" 
+    color-space="sRGB" 
+    renderer="colorManagement: true, physicallyCorrectLights: true, alpha: true" 
+    vr-mode-ui="enabled: false">
+
+    <a-light type="directional" intensity="1" position="1 1 1"></a-light>
+    <a-light type="ambient" intensity="0.8"></a-light>
+
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+    <a-entity id="saw-target" mindar-image-target="targetIndex: 1">
+        <a-entity id="hand-saw" position="0.5 0.2 0" rotation="0 180 0">
+             <a-box scale="0.15 0.4 0.15" color="orange"></a-box>
+             <a-box position="0 -0.2 0.6" scale="0.05 0.3 1.2" color="silver"></a-box>
+        </a-entity>
+    </a-entity>
+
+    <a-entity id="board-target" mindar-image-target="targetIndex: 0">
+        <a-entity id="hud-wood" position="0 0 0" rotation="90 0 0" visible="false">
+             <a-box scale="2.5 0.1 0.8" color="#F4E3C1"></a-box>
+             <a-box id="cut-zone" scale="2.6 0.5 1.0" material="wireframe: true; color: lime; opacity: 0.5"></a-box>
+        </a-entity>
+    </a-entity>
+
+  </a-scene>
+
+</body>
+</html>
