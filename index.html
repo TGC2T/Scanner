@@ -83,13 +83,12 @@
         this.gameActive = false;
         this.boardVisible = false;
         this.sawVisible = false;
-        this.tmpWoodPos = new THREE.Vector3();
-        this.tmpSawPos = new THREE.Vector3();
+
         this.tmpSawTipPos = new THREE.Vector3();
         
         this.el.sceneEl.addEventListener('arReady', () => {
             this.gameActive = true;
-            this.statusText.innerText = "Show BOTH targets (board + saw)";
+            this.statusText.innerText = "Show saw target";
             this.statusText.style.color = "#ffd166";
         });
 
@@ -128,49 +127,28 @@
       updateStatus: function() {
           if (!this.gameActive) return;
 
-          if (!this.boardVisible && !this.sawVisible) {
-            this.statusText.innerText = "Show BOTH targets (board + saw)";
-            this.statusText.style.color = "#ffd166";
-            return;
-          }
-
-          if (!this.boardVisible) {
-            this.statusText.innerText = "Show board target";
-            this.statusText.style.color = "#ffd166";
-            return;
-          }
-
           if (!this.sawVisible) {
             this.statusText.innerText = "Show saw target";
             this.statusText.style.color = "#ffd166";
             return;
           }
 
-          this.statusText.innerText = "READY! Move saw near board";
+          this.statusText.innerText = "READY! Move saw forward/back";
           this.statusText.style.color = "#00FF00";
       },
 
       tick: function() {
-        if (!this.gameActive || !this.boardVisible || !this.sawVisible) return;
+        if (!this.gameActive || !this.sawVisible) return;
 
-        this.cutZone.object3D.getWorldPosition(this.tmpWoodPos);
-        this.saw.object3D.getWorldPosition(this.tmpSawPos);
         this.sawBlade.object3D.getWorldPosition(this.tmpSawTipPos);
 
 
-        // Distance Check (calibrated for two separate tracked targets)
-        const distance = this.tmpWoodPos.distanceTo(this.tmpSawTipPos);
-
-        if (distance < 1.1) {
-            this.cutZone.setAttribute('color', 'red');
-            this.statusText.innerText = "SAWING...";
-            this.processCut(this.tmpSawTipPos.z);
-        } else {
-            this.cutZone.setAttribute('color', 'lime');
-            this.statusText.innerText = "Move Hand Closer";
-            this.statusText.style.color = "#ffd166";
-            this.lastZ = null;
+        if (this.boardVisible) {
+          this.cutZone.setAttribute('color', 'red');
         }
+        this.statusText.innerText = "SAWING...";
+        this.statusText.style.color = "#00FF00";
+        this.processCut(this.tmpSawTipPos.z);
       },
 
       processCut: function(currentZ) {
