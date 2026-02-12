@@ -2,21 +2,25 @@
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-  <title>AR Sawing: Shop & Manual Video</title>
+  <title>AR Sawing: Transparent & Paid</title>
   <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
 
   <style>
     :root { --app-height: 100vh; --primary: #F96302; --bg-dark: rgba(0,0,0,0.85); }
-    html, body { margin: 0; padding: 0; width: 100%; height: var(--app-height); overflow: hidden; background-color: black; font-family: 'Segoe UI', Roboto, sans-serif; }
+    html, body { margin: 0; padding: 0; width: 100%; height: var(--app-height); overflow: hidden; background-color: black; font-family: sans-serif; }
 
-    /* MANUAL CAMERA FEED (The Fix) */
+    /* MANUAL CAMERA FEED */
     #manual-video {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-        object-fit: cover; z-index: -1; /* Behind everything */
+        object-fit: cover; z-index: -1;
     }
 
-    /* UI LAYER */
+    /* THE FIX: FORCE A-FRAME TRANSPARENCY */
+    canvas.a-canvas {
+        background-color: transparent !important;
+    }
+
     #ui-layer {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
         z-index: 999; pointer-events: none;
@@ -28,10 +32,14 @@
         padding: 12px 25px; border-radius: 50px; border: 2px solid var(--primary);
         color: white; text-align: center; pointer-events: auto;
     }
-    .progress-track { width: 220px; height: 10px; background: #333; margin-top: 8px; border-radius: 5px; overflow: hidden; }
+    
+    .wallet-display {
+        color: #00FF00; font-size: 18px; font-weight: bold; margin-bottom: 5px;
+    }
+
+    .progress-track { width: 220px; height: 10px; background: #333; border-radius: 5px; overflow: hidden; }
     .progress-bar { width: 0%; height: 100%; background: #00FF00; transition: width 0.1s; }
 
-    /* SHOP UI */
     .shop-panel {
         background: var(--bg-dark); border-top: 3px solid var(--primary);
         padding: 15px; pointer-events: auto; display: flex; gap: 12px;
@@ -44,36 +52,37 @@
         color: white; border-radius: 10px; cursor: pointer; text-align: center;
         display: flex; flex-direction: column; transition: 0.2s;
     }
-    .btn b { font-size: 14px; margin-bottom: 2px; }
+    .btn b { font-size: 14px; }
     .btn span { font-size: 11px; color: #00FF00; font-weight: bold; }
     .btn.active { background: var(--primary); border-color: white; }
     .btn.active span { color: #330000; }
+    .btn:disabled { opacity: 0.3; cursor: not-allowed; }
   </style>
 
   <script>
-    // 1. MANUAL CAMERA HANDLER
     async function startManualCamera() {
         const video = document.getElementById('manual-video');
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: "environment", width: 1280, height: 720 } 
+                video: { facingMode: "environment" } 
             });
             video.srcObject = stream;
             video.play();
-        } catch (err) {
-            console.error("Manual Camera Failed: ", err);
-        }
+        } catch (err) { console.error("Camera access denied", err); }
     }
 
     AFRAME.registerComponent('ar-saw-logic', {
       init: function() {
-        startManualCamera(); // Start the backup feed immediately
+        startManualCamera();
 
         this.wood = document.querySelector('#hud-wood');
         this.saw = document.querySelector('#hand-saw');
         this.statusText = document.querySelector('#status-text');
         this.progressBar = document.querySelector('#progress-bar');
+        this.walletEl = document.querySelector('#money-amount');
         
+        // ECONOMY & GAME STATE
+        this.money = 100.00;
         this.cuts = 0;
         this.hardness = 100; 
         this.sharpness = 1; 
@@ -84,48 +93,50 @@
         this.el.sceneEl.addEventListener('arReady', () => {
             this.gameActive = true;
             this.wood.setAttribute('visible', 'true');
-            this.statusText.innerText = "Align Saw with Wood";
+            this.statusText.innerText = "Ready to Saw";
         });
 
         const sawTarget = document.querySelector('#saw-target');
-        sawTarget.addEventListener('targetFound', () => { 
-            this.sawVisible = true; 
-            this.lastZ = null;
-        });
+        sawTarget.addEventListener('targetFound', () => { this.sawVisible = true; this.lastZ = null; });
         sawTarget.addEventListener('targetLost', () => { this.sawVisible = false; });
 
         this.setupButtons();
       },
 
       setupButtons: function() {
-          // Wood selection with pricing
-          document.getElementById('btn-pine').addEventListener('click', (e) => this.resetBoard(100, '#F4E3C1', 'Pine ($5)', e.currentTarget, 'wood'));
-          document.getElementById('btn-oak').addEventListener('click', (e) => this.resetBoard(350, '#8B5A2B', 'Oak ($15)', e.currentTarget, 'wood'));
+          // Wood selection: Cost subtracted on click
+          document.getElementById('btn-pine').addEventListener('click', (e) => this.purchase(5, 100, '#F4E3C1', 'Pine', e.currentTarget, 'wood'));
+          document.getElementById('btn-oak').addEventListener('click', (e) => this.purchase(15, 350, '#8B5A2B', 'Oak', e.currentTarget, 'wood'));
           
-          // Saw selection with pricing
-          document.getElementById('btn-rusty').addEventListener('click', (e) => this.setSaw(1, 'silver', 'Rusty (Free)', e.currentTarget));
-          document.getElementById('btn-pro').addEventListener('click', (e) => this.setSaw(5, '#00FFFF', 'Pro ($50)', e.currentTarget));
+          // Saw selection
+          document.getElementById('btn-rusty').addEventListener('click', (e) => this.purchase(0, 1, 'silver', 'Rusty Steel', e.currentTarget, 'saw'));
+          document.getElementById('btn-pro').addEventListener('click', (e) => this.purchase(50, 5, '#00FFFF', 'Pro Laser', e.currentTarget, 'saw'));
       },
 
-      resetBoard: function(hard, color, name, btn, type) {
-          this.hardness = hard;
-          this.cuts = 0;
-          this.lastZ = null;
-          this.progressBar.style.width = '0%';
-          this.wood.setAttribute('visible', 'true');
-          this.wood.querySelector('.wood-visual').setAttribute('color', color);
-          this.statusText.innerText = "Working with: " + name;
-          
-          document.querySelectorAll('.shop-group:first-child .btn').forEach(b => b.classList.remove('active'));
-          btn.classList.add('active');
-      },
+      purchase: function(cost, value, color, name, btn, type) {
+          if (this.money < cost) {
+              this.statusText.innerText = "Insignificant Funds!";
+              return;
+          }
 
-      setSaw: function(sharp, color, name, btn) {
-          this.sharpness = sharp;
-          this.saw.querySelector('.blade-visual').setAttribute('color', color);
-          this.statusText.innerText = "Equipped: " + name;
-          
-          document.querySelectorAll('.shop-group:last-child .btn').forEach(b => b.classList.remove('active'));
+          this.money -= cost;
+          this.walletEl.innerText = this.money.toFixed(2);
+
+          if (type === 'wood') {
+              this.hardness = value;
+              this.cuts = 0;
+              this.lastZ = null;
+              this.progressBar.style.width = '0%';
+              this.wood.setAttribute('visible', 'true');
+              this.wood.querySelector('.wood-visual').setAttribute('color', color);
+              this.statusText.innerText = "Bought " + name;
+              document.querySelectorAll('.shop-group:first-child .btn').forEach(b => b.classList.remove('active'));
+          } else {
+              this.sharpness = value;
+              this.saw.querySelector('.blade-visual').setAttribute('color', color);
+              this.statusText.innerText = "Equipped " + name;
+              document.querySelectorAll('.shop-group:last-child .btn').forEach(b => b.classList.remove('active'));
+          }
           btn.classList.add('active');
       },
 
@@ -140,7 +151,7 @@
         const dist = Math.abs(sawPos.z - this.lastZ);
         const velocity = dist / (timeDelta / 1000);
 
-        // FILTER: Velocity must be human-like (between 0.2m/s and 3.5m/s)
+        // Filter out jitter and tracking glitches
         if (velocity > 0.2 && velocity < 3.5) {
             this.statusText.innerText = "SAWING...";
             this.cuts += (dist * 45 * this.sharpness);
@@ -150,7 +161,9 @@
             this.wood.object3D.position.x = (Math.random() - 0.5) * 0.015;
 
             if (this.cuts >= this.hardness) {
-                this.statusText.innerText = "CUT COMPLETE!";
+                this.statusText.innerText = "CUT COMPLETE! +$10 Reward";
+                this.money += 10; // Reward for finishing
+                this.walletEl.innerText = this.money.toFixed(2);
                 this.wood.setAttribute('visible', 'false');
                 this.lastZ = null;
             }
@@ -166,7 +179,8 @@
 
   <div id="ui-layer">
     <div class="hud-top">
-        <div id="status-text">Scanning for Marker...</div>
+        <div class="wallet-display">$<span id="money-amount">100.00</span></div>
+        <div id="status-text">Scanning...</div>
         <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
     </div>
 
@@ -190,15 +204,14 @@
 
   <a-scene 
     ar-saw-logic 
+    embedded
     mindar-image="imageTargetSrc: ./targets.mind; uiScanning: no;" 
-    color-space="sRGB" 
-    renderer="colorManagement: true, alpha: true, antialias: true" 
+    renderer="colorManagement: true, alpha: true" 
     vr-mode-ui="enabled: false">
     
-    <a-light type="ambient" intensity="0.8"></a-light>
-    <a-light type="directional" position="1 2 1" intensity="0.5"></a-light>
+    <a-light type="ambient" intensity="1"></a-light>
 
-    <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
     <a-entity id="hud-wood" position="0 -0.4 -1.2" visible="false">
          <a-box class="wood-visual" scale="1.4 0.08 0.5" color="#F4E3C1"></a-box>
@@ -207,7 +220,8 @@
 
     <a-entity id="saw-target" mindar-image-target="targetIndex: 0">
         <a-entity id="hand-saw" rotation="0 -90 0">
-             <a-box position="0 0 0.1" scale="0.08 0.25 0.08" color="#333"></a-box> <a-box class="blade-visual" position="0.3 0 0.1" scale="0.6 0.15 0.01" color="silver" metalness="0.8" roughness="0.2"></a-box>
+             <a-box position="0 0 0.1" scale="0.08 0.25 0.08" color="#333"></a-box>
+             <a-box class="blade-visual" position="0.3 0 0.1" scale="0.6 0.15 0.01" color="silver"></a-box>
         </a-entity>
     </a-entity>
   </a-scene>
