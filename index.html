@@ -2,34 +2,34 @@
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-  <title>AR Sawing: Persistent Board</title>
+  <title>AR Saw: Independent Board</title>
   <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
 
   <style>
-    :root { --app-height: 100vh; --primary: #F96302; --bg-ui: rgba(0,0,0,0.85); }
+    :root { --app-height: 100vh; --primary: #F96302; }
     
     html, body { 
         margin: 0; padding: 0; width: 100%; height: var(--app-height); 
-        overflow: hidden; background-color: #000;
-        font-family: sans-serif;
+        overflow: hidden; background-color: #111; font-family: sans-serif;
     }
 
-    /* BACKGROUND VIDEO */
+    /* 1. MANUAL CAMERA FEED (Always visible at the bottom) */
     #manual-video {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
         object-fit: cover; z-index: 1;
     }
 
-    /* A-FRAME SCENE */
+    /* 2. THE A-FRAME LAYER (Transparent Overlay) */
     a-scene {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-        z-index: 2;
+        z-index: 5;
     }
 
-    canvas.a-canvas { background-color: transparent !important; }
+    /* FORCING TRANSPARENCY */
+    .a-canvas { background-color: transparent !important; }
 
-    /* UI OVERLAY */
+    /* 3. THE UI LAYER (Top Layer) */
     #ui-layer {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
         z-index: 999; pointer-events: none;
@@ -37,44 +37,41 @@
     }
 
     .hud-top {
-        margin-top: 20px; align-self: center; background: var(--bg-ui);
+        margin-top: 20px; align-self: center; background: rgba(0,0,0,0.85);
         padding: 15px 25px; border-radius: 30px; border: 2px solid var(--primary);
         color: white; text-align: center; pointer-events: auto;
     }
     
     .wallet { color: #2ecc71; font-weight: bold; font-size: 1.2em; }
-    .progress-track { width: 200px; height: 10px; background: #333; border-radius: 5px; margin: 10px auto 0; overflow: hidden; }
+    .progress-track { width: 220px; height: 12px; background: #333; border-radius: 6px; margin: 10px auto; overflow: hidden; }
     .progress-bar { width: 0%; height: 100%; background: #2ecc71; transition: width 0.1s; }
 
     .shop-panel {
-        background: var(--bg-ui); border-top: 3px solid var(--primary);
+        background: rgba(0,0,0,0.9); border-top: 3px solid var(--primary);
         padding: 15px; pointer-events: auto; display: flex; gap: 10px;
     }
     .shop-group { display: flex; flex-direction: column; gap: 5px; flex: 1; }
-    .shop-label { color: var(--primary); font-size: 0.7em; font-weight: bold; text-transform: uppercase; }
-    
     .btn {
         flex: 1; padding: 10px; border: 1px solid #444; background: #222;
         color: white; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; align-items: center;
     }
-    .btn b { font-size: 0.9em; }
-    .btn span { font-size: 0.7em; color: #00FF00; }
     .btn.active { background: var(--primary); color: #000; border-color: #fff; }
-    .btn.active span { color: #300; }
   </style>
 
   <script>
-    async function startCam() {
-        const v = document.getElementById('manual-video');
+    // Force webcam regardless of AR state
+    async function startCamera() {
         try {
-            const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-            v.srcObject = s;
-        } catch (e) { console.error("Cam error", e); }
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            document.getElementById('manual-video').srcObject = stream;
+        } catch (e) { console.error("Camera error:", e); }
     }
 
-    AFRAME.registerComponent('ar-logic', {
+    AFRAME.registerComponent('saw-game-logic', {
       init: function() {
-        startCam();
+        startCamera();
+        
+        // State
         this.money = 100.00;
         this.cuts = 0;
         this.hardness = 100;
@@ -82,71 +79,85 @@
         this.lastZ = null;
         this.sawVisible = false;
 
-        this.wood = document.querySelector('#wood-model');
-        this.saw = document.querySelector('#saw-model');
-        this.statusText = document.querySelector('#status');
+        // Elements
+        this.wood = document.querySelector('#persistent-board');
+        this.sawBlade = document.querySelector('#saw-blade');
         this.progBar = document.querySelector('#bar');
-        this.walletEl = document.querySelector('#money');
+        this.statusText = document.querySelector('#status');
+        this.walletDisplay = document.querySelector('#money-val');
 
-        const target = document.querySelector('#saw-target');
-        target.addEventListener('targetFound', () => { this.sawVisible = true; this.lastZ = null; });
+        // Track the saw marker
+        const target = document.querySelector('#saw-marker-target');
+        target.addEventListener('targetFound', () => { 
+            this.sawVisible = true; 
+            this.lastZ = null; 
+        });
         target.addEventListener('targetLost', () => { this.sawVisible = false; });
 
-        this.setupShop();
+        this.initShop();
       },
 
-      setupShop: function() {
-          const buy = (cost, hard, sharp, color, type, el) => {
+      initShop: function() {
+          const buy = (cost, hard, sharp, color, isWood, btn) => {
               if (this.money >= cost) {
                   this.money -= cost;
-                  this.walletEl.innerText = this.money.toFixed(2);
-                  if (type === 'wood') {
+                  this.walletDisplay.innerText = this.money.toFixed(2);
+                  if (isWood) {
                       this.hardness = hard; this.cuts = 0; this.progBar.style.width = '0%';
                       this.wood.setAttribute('visible', 'true');
-                      this.wood.querySelector('.wood-mesh').setAttribute('color', color);
+                      this.wood.querySelector('.mesh').setAttribute('color', color);
                       document.querySelectorAll('.w-btn').forEach(b => b.classList.remove('active'));
                   } else {
                       this.sharpness = sharp;
-                      this.saw.querySelector('.blade-mesh').setAttribute('color', color);
+                      this.sawBlade.setAttribute('color', color);
                       document.querySelectorAll('.s-btn').forEach(b => b.classList.remove('active'));
                   }
-                  el.classList.add('active');
-              } else { this.statusText.innerText = "POOR!"; }
+                  btn.classList.add('active');
+              } else {
+                  this.statusText.innerText = "Insufficient Funds!";
+              }
           };
 
-          document.getElementById('p-pine').onclick = (e) => buy(5, 100, 0, '#e3c4a8', 'wood', e.currentTarget);
-          document.getElementById('p-oak').onclick = (e) => buy(15, 400, 0, '#7d5233', 'wood', e.currentTarget);
-          document.getElementById('s-steel').onclick = (e) => buy(0, 0, 1, 'silver', 'saw', e.currentTarget);
-          document.getElementById('s-laser').onclick = (e) => buy(50, 0, 10, '#00ffff', 'saw', e.currentTarget);
+          document.getElementById('buy-pine').onclick = (e) => buy(5, 100, 0, '#e3c4a8', true, e.currentTarget);
+          document.getElementById('buy-oak').onclick = (e) => buy(15, 350, 0, '#7d5233', true, e.currentTarget);
+          document.getElementById('buy-steel').onclick = (e) => buy(0, 0, 1, 'silver', false, e.currentTarget);
+          document.getElementById('buy-laser').onclick = (e) => buy(50, 0, 10, '#00ffff', false, e.currentTarget);
       },
 
       tick: function(t, dt) {
+          // The saw only works if the marker is visible
           if (!this.sawVisible || !dt) return;
 
           const sawPos = new THREE.Vector3();
-          this.saw.object3D.getWorldPosition(sawPos);
+          // Get the ACTUAL world position of the saw, regardless of the marker
+          this.sawBlade.object3D.getWorldPosition(sawPos);
 
           if (this.lastZ === null) { this.lastZ = sawPos.z; return; }
 
           const delta = Math.abs(sawPos.z - this.lastZ);
           const velocity = delta / (dt / 1000);
 
-          if (velocity > 0.2 && velocity < 4) {
+          // Only count "Real" sawing motion
+          if (velocity > 0.2 && velocity < 4.0) {
               this.statusText.innerText = "SAWING...";
-              this.cuts += (delta * 60 * this.sharpness);
+              this.cuts += (delta * 70 * this.sharpness);
               
               let p = Math.min((this.cuts / this.hardness) * 100, 100);
               this.progBar.style.width = p + "%";
+              
+              // Vibration effect
               this.wood.object3D.position.x = (Math.random() - 0.5) * 0.02;
 
               if (this.cuts >= this.hardness) {
-                  this.money += 20; // Profit!
-                  this.walletEl.innerText = this.money.toFixed(2);
-                  this.statusText.innerText = "CUT DONE! +$20.00";
+                  this.money += 25; // Profit per board
+                  this.walletDisplay.innerText = this.money.toFixed(2);
+                  this.statusText.innerText = "CUT COMPLETE! +$25.00";
                   this.wood.setAttribute('visible', 'false');
                   this.cuts = 0;
                   this.lastZ = null;
               }
+          } else {
+              this.wood.object3D.position.x = 0;
           }
           this.lastZ = sawPos.z;
       }
@@ -159,31 +170,25 @@
 
   <div id="ui-layer">
     <div class="hud-top">
-        <div class="wallet">$<span id="money">100.00</span></div>
-        <div id="status">Saw Marker Required</div>
+        <div class="wallet">$<span id="money-val">100.00</span></div>
+        <div id="status">Displaying Board...</div>
         <div class="progress-track"><div id="bar" class="progress-bar"></div></div>
     </div>
 
     <div class="shop-panel">
         <div class="shop-group">
-            <div class="shop-label">Lumber Yard</div>
-            <div style="display:flex; gap:5px">
-                <button id="p-pine" class="btn w-btn active"><b>Pine</b><span>$5</span></button>
-                <button id="p-oak" class="btn w-btn"><b>Oak</b><span>$15</span></button>
-            </div>
+            <button id="buy-pine" class="btn w-btn active"><b>Pine</b><span>$5</span></button>
+            <button id="buy-oak" class="btn w-btn"><b>Oak</b><span>$15</span></button>
         </div>
         <div class="shop-group">
-            <div class="shop-label">Hardware</div>
-            <div style="display:flex; gap:5px">
-                <button id="s-steel" class="btn s-btn active"><b>Steel</b><span>FREE</span></button>
-                <button id="s-laser" class="btn s-btn"><b>Pro</b><span>$50</span></button>
-            </div>
+            <button id="buy-steel" class="btn s-btn active"><b>Steel</b><span>FREE</span></button>
+            <button id="buy-laser" class="btn s-btn"><b>Laser</b><span>$50</span></button>
         </div>
     </div>
   </div>
 
   <a-scene 
-    ar-logic
+    saw-game-logic
     embedded
     mindar-image="imageTargetSrc: ./targets.mind; uiScanning: no;"
     renderer="transparent: true; alpha: true; colorManagement: true;"
@@ -193,16 +198,15 @@
     <a-light type="ambient" intensity="1.5"></a-light>
 
     <a-camera position="0 0 0" look-controls="enabled: false">
-        <a-entity id="wood-model" position="0 -0.4 -1" visible="true">
-             <a-box class="wood-mesh" scale="1.2 0.08 0.4" color="#e3c4a8"></a-box>
-             <a-box scale="1.22 0.1 0.42" material="wireframe: true; color: #F96302; opacity: 0.3"></a-box>
+        <a-entity id="persistent-board" position="0 -0.4 -1">
+             <a-box class="mesh" scale="1.3 0.1 0.4" color="#e3c4a8"></a-box>
+             <a-box scale="1.32 0.12 0.42" material="wireframe: true; color: #F96302; opacity: 0.4"></a-box>
         </a-entity>
     </a-camera>
 
-    <a-entity id="saw-target" mindar-image-target="targetIndex: 0">
-        <a-entity id="saw-model" rotation="0 0 0">
-             <a-box scale="0.08 0.25 0.08" color="#333"></a-box>
-             <a-box class="blade-mesh" position="0.25 0 0" scale="0.5 0.12 0.01" color="silver" metalness="0.8"></a-box>
+    <a-entity id="saw-marker-target" mindar-image-target="targetIndex: 0">
+        <a-entity rotation="0 -90 0">
+             <a-box scale="0.08 0.25 0.08" color="#333"></a-box> <a-box id="saw-blade" position="0.3 0 0" scale="0.6 0.15 0.01" color="silver" metalness="0.9"></a-box>
         </a-entity>
     </a-entity>
 
